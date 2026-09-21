@@ -18,7 +18,7 @@
   "dependencies": {
     "@base-ui/react": "^1.7.0",
     "@convex-dev/auth": "^0.0.95",
-    "@fal-ai/client": "^1.10.1",
+    "@decartai/sdk": "^0.2.1",
     "@hookform/resolvers": "^5.7.1",
     "@shadcn/react": "^0.3.0",
     "class-variance-authority": "0.7.1",

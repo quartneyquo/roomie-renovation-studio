@@ -13,6 +13,9 @@ export type Evaluation = {
   checks: { label: string; status: "pass" | "warn" | "unknown" }[];
   adjustment: Placement | null;
   provider: string;
+  fit?: "green" | "amber" | "red";
+  confidence?: number;
+  visualEstimate?: boolean;
 };
 export const initialPlacement: Placement = {
   x: 40,

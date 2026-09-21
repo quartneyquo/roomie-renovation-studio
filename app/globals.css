@@ -691,6 +691,18 @@ a:focus-visible {
   background: #f4e4da;
   color: #9c653e;
 }
+.verdict-label.green {
+  background: #deeedf;
+  color: #386442;
+}
+.verdict-label.amber {
+  background: #f6ead1;
+  color: #886225;
+}
+.verdict-label.red {
+  background: #f5dddd;
+  color: #913d4d;
+}
 .verdict-label.uncertain {
   background: #f1e9d8;
   color: #98733d;
@@ -787,32 +799,20 @@ a:focus-visible {
 .suggestion-preview {
   margin-top: 14px;
 }
-.mini-scene {
-  position: relative;
-  aspect-ratio: 1.5;
+.h3-status {
+  min-height: 140px;
+  display: grid;
+  place-items: center;
+  padding: 24px;
   border-radius: 8px;
-  overflow: hidden;
+  background: #f7efe9;
+  color: #765b4d;
+  text-align: center;
+  line-height: 1.5;
 }
-.mini-scene > img:first-child {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-.mini-scene .mini-item {
-  position: absolute;
-  width: 30%;
-  left: 50%;
-  top: 50%;
-  animation: suggestion 4s ease-in-out infinite alternate;
-  animation-play-state: paused;
-}
-.mini-scene.playing .mini-item {
-  animation-play-state: running;
-}
-.mini-scene button {
-  position: absolute;
-  right: 8px;
-  bottom: 8px;
+.h3-status.error {
+  background: #fff0f0;
+  color: #922f46;
 }
 .suggestion-preview > span {
   display: block;
@@ -822,12 +822,6 @@ a:focus-visible {
 }
 .suggestion-preview > button {
   font-size: 12px;
-}
-@keyframes suggestion {
-  to {
-    left: 24%;
-    top: 49%;
-  }
 }
 .dialog-stack {
   display: flex;
@@ -842,6 +836,197 @@ a:focus-visible {
   font-size: 12px;
   color: #9e887a;
   line-height: 1.6;
+}
+.visual-estimate-note {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid #ead8c2;
+  border-radius: 10px;
+  background: #fff9ed;
+  color: #795f42;
+  font-size: 11px;
+  line-height: 1.55;
+}
+.room-scan-flow {
+  display: grid;
+  gap: 22px;
+}
+.scan-progress {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  padding: 4px 0 2px;
+}
+.scan-progress > div {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  color: #a79589;
+  font-size: 10px;
+  text-align: center;
+}
+.scan-progress span {
+  display: grid;
+  width: 25px;
+  height: 25px;
+  place-items: center;
+  border-radius: 50%;
+  border: 1px solid #dacac1;
+  background: #fff;
+}
+.scan-progress > div.active {
+  color: #71283d;
+  font-weight: 700;
+}
+.scan-progress > div.active span {
+  border-color: #8c304a;
+  background: #8c304a;
+  color: #fff;
+}
+.scan-guide,
+.scan-recorder,
+.scan-state {
+  display: grid;
+  gap: 14px;
+}
+.scan-guide h3,
+.scan-state h3 {
+  margin: 0;
+  color: #5c2c39;
+  font:
+    24px/1.2 Georgia,
+    serif;
+}
+.scan-guide ul {
+  margin: 0;
+  padding-left: 20px;
+  color: #765f54;
+  font-size: 13px;
+  line-height: 1.8;
+}
+.scan-illustration {
+  display: flex;
+  min-height: 108px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 9px;
+  border-radius: 16px;
+  background: linear-gradient(135deg, #fbede8, #f4e5cf);
+  color: #842f48;
+  font-size: 12px;
+  font-weight: 700;
+}
+.upload-disclosure {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 12px;
+  border-radius: 12px;
+  background: #f5f0eb;
+  color: #6f5e55;
+  font-size: 12px;
+  line-height: 1.55;
+}
+.upload-disclosure svg {
+  flex: 0 0 auto;
+  color: #7a2c42;
+  margin-top: 1px;
+}
+.scan-video-wrap {
+  position: relative;
+  overflow: hidden;
+  min-height: 300px;
+  border-radius: 16px;
+  background: #231f20;
+}
+.scan-video-wrap video {
+  display: block;
+  width: 100%;
+  height: min(52vh, 440px);
+  object-fit: cover;
+}
+.recording-badge {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 10px;
+  border-radius: 999px;
+  background: rgba(45, 20, 25, 0.82);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+.recording-badge i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ff5266;
+}
+.scan-recorder p,
+.scan-state p {
+  margin: 0;
+  color: #7b675c;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.scan-timer-track {
+  height: 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #eadfd8;
+}
+.scan-timer-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #9a354f, #dd806e);
+  transition: width 250ms linear;
+}
+.scan-state {
+  min-height: 270px;
+  place-content: center;
+  justify-items: center;
+  padding: 32px;
+  text-align: center;
+  border-radius: 16px;
+  background: #fcf7f2;
+}
+.scan-spinner {
+  width: 34px;
+  height: 34px;
+  border: 3px solid #eadbd2;
+  border-top-color: #8b3048;
+  border-radius: 50%;
+  animation: scan-spin 0.85s linear infinite;
+}
+@keyframes scan-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.ready-mark {
+  display: grid;
+  width: 54px;
+  height: 54px;
+  place-items: center;
+  border-radius: 50%;
+  background: #dfeee1;
+  color: #3e6847;
+}
+.scan-state.failed {
+  background: #fff4f2;
+  color: #943d4d;
+}
+.scan-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
 }
 .checkbox-label {
   display: flex;
@@ -1136,6 +1321,20 @@ a:focus-visible {
   .stage-top .subtle {
     display: none;
   }
+  .wide-dialog {
+    width: calc(100vw - 20px);
+    max-height: 94vh;
+    padding: 18px;
+  }
+  .scan-video-wrap {
+    min-height: 260px;
+  }
+  .scan-video-wrap video {
+    height: 48vh;
+  }
+  .scan-progress > div {
+    font-size: 9px;
+  }
 }
 @media (prefers-reduced-motion: reduce) {
   *,
@@ -1233,20 +1432,6 @@ a:focus-visible {
   font-size: 12px;
   text-decoration: underline;
   white-space: nowrap;
-}
-.mini-scene .mini-item {
-  left: var(--from-x);
-  top: var(--from-y);
-  width: var(--from-size);
-  transform: translate(-50%, -50%) rotate(var(--from-rotation));
-}
-@keyframes suggestion {
-  to {
-    left: var(--to-x);
-    top: var(--to-y);
-    width: var(--to-size);
-    transform: translate(-50%, -50%) rotate(var(--to-rotation));
-  }
 }
 /* Room evidence sits beside the idea so perception state stays visible. */
 .scene-understanding {

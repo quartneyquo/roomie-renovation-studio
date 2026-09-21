@@ -33,6 +33,11 @@ export const evaluation = v.object({
   ),
   adjustment: v.union(placement, v.null()),
   provider: v.string(),
+  fit: v.optional(
+    v.union(v.literal("green"), v.literal("amber"), v.literal("red")),
+  ),
+  confidence: v.optional(v.number()),
+  visualEstimate: v.optional(v.boolean()),
 });
 export const jobKind = v.union(
   v.literal("jev"),
@@ -48,6 +53,13 @@ export const jobStatus = v.union(
   v.literal("succeeded"),
   v.literal("failed"),
   v.literal("cancelled"),
+);
+export const scanStatus = v.union(
+  v.literal("uploading"),
+  v.literal("reconstructing"),
+  v.literal("analyzing"),
+  v.literal("ready"),
+  v.literal("failed"),
 );
 export default defineSchema({
   ...authTables,
@@ -98,6 +110,7 @@ export default defineSchema({
     result: v.optional(v.string()),
     error: v.optional(v.string()),
     providerRequestId: v.optional(v.string()),
+    phase: v.optional(scanStatus),
     createdAt: v.number(),
     updatedAt: v.number(),
     attempts: v.number(),
@@ -105,6 +118,22 @@ export default defineSchema({
   })
     .index("by_ownerId_and_requestId", ["ownerId", "requestId"])
     .index("by_ownerId_and_createdAt", ["ownerId", "createdAt"])
+    .index("by_expiresAt", ["expiresAt"]),
+  roomScans: defineTable({
+    ownerId: v.id("users"),
+    sceneKey: v.string(),
+    requestId: v.string(),
+    videoId: v.optional(v.id("_storage")),
+    jobId: v.optional(v.id("providerJobs")),
+    status: scanStatus,
+    snapshot: v.optional(v.string()),
+    error: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    expiresAt: v.number(),
+  })
+    .index("by_ownerId_and_sceneKey", ["ownerId", "sceneKey"])
+    .index("by_ownerId_and_requestId", ["ownerId", "requestId"])
     .index("by_expiresAt", ["expiresAt"]),
   researchSources: defineTable({
     cacheKey: v.string(),

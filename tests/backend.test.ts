@@ -105,6 +105,31 @@ describe("private room storage", () => {
       await t.run(async (ctx) => (await ctx.storage.get(ids[0])) !== null),
     ).toBe(false);
   });
+  it("keeps room scans owner-scoped and deletes source video after analysis", async () => {
+    const { t, alice, bob } = await setup();
+    const videoId = await t.run((ctx) =>
+      ctx.storage.store(new Blob(["video"], { type: "video/webm" })),
+    );
+    const id = await alice.mutation(api.scans.registerVideo, {
+      storageId: videoId,
+      sceneKey: "living-room",
+      requestId: "scan-1",
+    });
+    await expect(bob.mutation(api.scans.remove, { id })).rejects.toThrow(
+      "Room scan not found",
+    );
+    const snapshot = JSON.stringify({
+      model: "spatial-test",
+      geometry: { walls: [{}], doors: [], windows: [], bboxes: [] },
+    });
+    await t.mutation(internal.scans.complete, { id, snapshot });
+    expect(
+      await alice.query(api.scans.current, { sceneKey: "living-room" }),
+    ).toMatchObject({ status: "ready", snapshot });
+    expect(
+      await t.run(async (ctx) => (await ctx.storage.get(videoId)) !== null),
+    ).toBe(false);
+  });
   it("rejects a handoff of someone else's saved room", async () => {
     const { t, id, b } = await room();
     await expect(

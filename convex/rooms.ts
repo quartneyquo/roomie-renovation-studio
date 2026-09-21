@@ -231,6 +231,7 @@ export const expire = internalMutation({
       "providerJobs",
       "researchSources",
       "sceneStates",
+      "roomScans",
     ] as const) {
       for (const row of await ctx.db
         .query(table)

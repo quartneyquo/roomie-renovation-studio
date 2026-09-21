@@ -3,7 +3,7 @@ import { v, ConvexError } from "convex/values";
 import { internalQuery, internalMutation } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { ownerMutation, ownerQuery } from "./rooms";
-import { jobKind, jobStatus } from "./schema";
+import { jobKind, jobStatus, scanStatus } from "./schema";
 export const start = ownerMutation({
   args: {
     kind: jobKind,
@@ -66,6 +66,7 @@ const jobView = v.object({
   status: jobStatus,
   result: v.optional(v.string()),
   error: v.optional(v.string()),
+  phase: v.optional(scanStatus),
 });
 export const get = ownerQuery({
   args: { id: v.id("providerJobs") },
@@ -80,6 +81,7 @@ export const get = ownerQuery({
       status: j.status,
       ...(j.result ? { result: j.result } : {}),
       ...(j.error ? { error: j.error } : {}),
+      ...(j.phase ? { phase: j.phase } : {}),
     };
   },
 });
@@ -116,6 +118,7 @@ export const load = internalQuery({
       result: v.optional(v.string()),
       error: v.optional(v.string()),
       providerRequestId: v.optional(v.string()),
+      phase: v.optional(scanStatus),
       createdAt: v.number(),
       updatedAt: v.number(),
       attempts: v.number(),
@@ -131,6 +134,7 @@ export const patch = internalMutation({
     result: v.optional(v.string()),
     error: v.optional(v.string()),
     providerRequestId: v.optional(v.string()),
+    phase: v.optional(scanStatus),
   },
   returns: v.boolean(),
   handler: async (ctx, { id, ...a }) => {

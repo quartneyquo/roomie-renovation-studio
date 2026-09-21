@@ -4,6 +4,33 @@ import hostingConfig from "./.openai/hosting.json";
 import { readExecutionProfile } from "./scripts/execution-profile.mjs";
 import { sites } from "./build/sites-vite-plugin";
 
+const DECART_FRAME_TIMING_CHECK =
+  "return scriptTransformSupported || insertableStreamsSupported;";
+
+function disableDecartFrameTiming(code: string) {
+  return code.includes(DECART_FRAME_TIMING_CHECK)
+    ? code.replace(DECART_FRAME_TIMING_CHECK, "return false;")
+    : code;
+}
+
+function decartFrameMetadataCompatibility() {
+  const diagnosticsModule =
+    "/@decartai/sdk/dist/realtime/browser/frame-metadata-diagnostics.js";
+
+  return {
+    name: "decart-frame-metadata-compatibility",
+    enforce: "pre" as const,
+    transform(code: string, id: string) {
+      if (!id.includes(diagnosticsModule)) return null;
+
+      // The SDK's prebuilt classic worker is not compatible with Vite's dev
+      // transforms. Frame timing is diagnostic-only, so disable that feature
+      // while keeping the Lucy realtime media session intact.
+      return disableDecartFrameTiming(code);
+    },
+  };
+}
+
 const SITE_CREATOR_PLACEHOLDER_DATABASE_ID =
   "00000000-0000-4000-8000-000000000000";
 
@@ -51,11 +78,21 @@ export default defineConfig(async () => {
   const { cloudflare } = await import("@cloudflare/vite-plugin");
 
   return {
+    optimizeDeps: {
+      rolldownOptions: {
+        plugins: [decartFrameMetadataCompatibility()],
+      },
+    },
     server: {
-      ...(managedLinux ? { host: "0.0.0.0", allowedHosts: ["terminal.local"] } : {}),
-      ...(isCodexSeatbeltSandbox ? { watch: { useFsEvents: false, usePolling: true } } : {}),
+      ...(managedLinux
+        ? { host: "0.0.0.0", allowedHosts: ["terminal.local"] }
+        : {}),
+      ...(isCodexSeatbeltSandbox
+        ? { watch: { useFsEvents: false, usePolling: true } }
+        : {}),
     },
     plugins: [
+      decartFrameMetadataCompatibility(),
       vinext(),
       sites({ mockAuth: !managedLinux }),
       cloudflare({

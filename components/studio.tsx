@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ArrowDownToLine,
   ArrowLeftRight,
@@ -15,8 +15,6 @@ import {
   Mail,
   Maximize2,
   Move,
-  Pause,
-  Play,
   Plus,
   RotateCcw,
   Settings2,
@@ -87,6 +85,16 @@ type ResearchSource = {
   retrievedAt: number;
 };
 type Contact = { email: string; name: string; url: string };
+type ScanStage =
+  | "guide"
+  | "permission"
+  | "preview"
+  | "recording"
+  | "uploading"
+  | "reconstructing"
+  | "analyzing"
+  | "ready"
+  | "failed";
 export default function Studio() {
   const cloud = useCloud();
   const [connections, setConnections] = useState<Connections>({
@@ -102,6 +110,8 @@ export default function Studio() {
     [contacts, setContacts] = useState<Contact[]>([]),
     [jobMessage, setJobMessage] = useState("");
   const [clipUrl, setClipUrl] = useState<string | null>(null),
+    [clipLoading, setClipLoading] = useState(false),
+    [clipError, setClipError] = useState<string | null>(null),
     [lucyActive, setLucyActive] = useState(false),
     [emailSnapshot, setEmailSnapshot] = useState<{
       screenshot: string;
@@ -117,6 +127,16 @@ export default function Studio() {
   const jobEpoch = useRef<Record<string, number>>({});
   const scanFile = useRef<HTMLInputElement>(null);
   const scanEpoch = useRef(0);
+  const scanPreview = useRef<HTMLVideoElement>(null);
+  const scanStream = useRef<MediaStream | null>(null);
+  const scanRecorder = useRef<MediaRecorder | null>(null);
+  const scanChunks = useRef<Blob[]>([]);
+  const scanTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const scanStartedAt = useRef(0);
+  const [scanStage, setScanStage] = useState<ScanStage>("guide");
+  const [scanSeconds, setScanSeconds] = useState(0);
+  const [scanError, setScanError] = useState("");
+  const [roomScanId, setRoomScanId] = useState<Id<"roomScans"> | null>(null);
   const snapshotFile = useRef<HTMLInputElement>(null);
   const sceneKey = useRef("");
   const [roomSnapshot, setRoomSnapshot] = useState<SpatialSnapshot | null>(
@@ -146,8 +166,7 @@ export default function Studio() {
     [localSaved, setSaved] = useState<SavedRoom[]>([]),
     [saveName, setSaveName] = useState("A warmer living room"),
     [ack, setAck] = useState(false),
-    [suggestion, setSuggestion] = useState(false),
-    [playing, setPlaying] = useState(false);
+    [suggestion, setSuggestion] = useState(false);
   const [recipient, setRecipient] = useState(""),
     [emailBody, setEmailBody] = useState(""),
     [approved, setApproved] = useState(false),
@@ -282,6 +301,7 @@ export default function Studio() {
     return () => {
       mounted.current = false;
       lucy.current?.close();
+      stopScanCamera();
       for (const cancel of activeJobs.current.values()) cancel();
     };
   }, []);
@@ -357,12 +377,22 @@ export default function Studio() {
   async function showSuggestion() {
     const current = revision;
     setSuggestion(true);
-    setPlaying(true);
     setClipUrl(null);
-    if (!connections.h3 || !cloud.client) return;
+    setClipError(null);
+    if (!connections.h3 || !cloud.client) {
+      setClipLoading(false);
+      setClipError("H3 Max Turbo is not connected.");
+      return;
+    }
+    if (source === "camera" && !lucyActive) {
+      setClipLoading(false);
+      setClipError("Wait for Lucy's generated stream before creating a clip.");
+      return;
+    }
+    setClipLoading(true);
     setJobMessage("Creating your suggestion clip…");
     try {
-      const imageId = await uploadImage(cloud.client, await capture());
+      const imageId = await uploadImage(cloud.client, await capture(false));
       const endImageId = await uploadImage(
         cloud.client,
         await capture(true, evaluation.adjustment || placement),
@@ -376,12 +406,21 @@ export default function Studio() {
         },
         current,
       );
-      if (latestRevision.current === current && typeof result.url === "string")
-        setClipUrl(result.url);
+      if (latestRevision.current !== current) return;
+      if (typeof result.url !== "string")
+        throw new Error("H3 Max Turbo completed without returning a clip.");
+      setClipUrl(result.url);
     } catch (e) {
-      if (latestRevision.current === current) toast.error((e as Error).message);
+      if (latestRevision.current === current) {
+        const message = (e as Error).message;
+        setClipError(message);
+        toast.error(message);
+      }
     } finally {
-      if (latestRevision.current === current) setJobMessage("");
+      if (latestRevision.current === current) {
+        setClipLoading(false);
+        setJobMessage("");
+      }
     }
   }
   async function findExperts() {
@@ -480,9 +519,280 @@ export default function Studio() {
       );
     }
   }
+  function stopScanCamera(discardRecording = true) {
+    if (scanTimer.current) clearInterval(scanTimer.current);
+    scanTimer.current = null;
+    if (scanRecorder.current?.state === "recording") {
+      if (discardRecording) scanRecorder.current.onstop = null;
+      scanRecorder.current.stop();
+    }
+    scanRecorder.current = null;
+    scanStream.current?.getTracks().forEach((track) => track.stop());
+    scanStream.current = null;
+    if (scanPreview.current) scanPreview.current.srcObject = null;
+  }
+  function openRoomScan(replace = false) {
+    stopScanCamera();
+    setScanError("");
+    setScanSeconds(0);
+    setScanStage("guide");
+    if (replace) setJobMessage("");
+    setDialog("scan");
+  }
+  async function requestScanCamera() {
+    if (!connections.spatial) {
+      setScanError("Modal room reconstruction is not connected.");
+      setScanStage("failed");
+      return;
+    }
+    setScanStage("permission");
+    setScanError("");
+    try {
+      const captureStream = stream.current?.active
+        ? new MediaStream(
+            stream.current.getVideoTracks().map((track) => track.clone()),
+          )
+        : await navigator.mediaDevices.getUserMedia({
+            video: {
+              facingMode: { ideal: "environment" },
+              width: { ideal: 720 },
+              height: { ideal: 1280 },
+            },
+            audio: false,
+          });
+      scanStream.current = captureStream;
+      setScanStage("preview");
+      requestAnimationFrame(() => {
+        if (scanPreview.current) {
+          scanPreview.current.srcObject = captureStream;
+          void scanPreview.current.play().catch(() => {});
+        }
+      });
+    } catch {
+      setScanError(
+        "Camera access was blocked. Allow camera access in Chrome, then try again.",
+      );
+      setScanStage("failed");
+    }
+  }
+  function startRoomRecording() {
+    const captureStream = scanStream.current;
+    if (!captureStream || typeof MediaRecorder === "undefined") {
+      setScanError("This browser cannot record a room walkthrough.");
+      setScanStage("failed");
+      return;
+    }
+    const mimeType = [
+      "video/webm;codecs=vp9",
+      "video/webm;codecs=vp8",
+      "video/mp4",
+      "video/webm",
+    ].find((type) => MediaRecorder.isTypeSupported(type));
+    try {
+      const recorder = new MediaRecorder(captureStream, {
+        ...(mimeType ? { mimeType } : {}),
+        videoBitsPerSecond: 1_200_000,
+      });
+      scanChunks.current = [];
+      recorder.ondataavailable = (event) => {
+        if (event.data.size) scanChunks.current.push(event.data);
+      };
+      recorder.onstop = () => {
+        const blob = new Blob(scanChunks.current, {
+          type: recorder.mimeType || "video/webm",
+        });
+        stopScanCamera(false);
+        void uploadRoomRecording(blob);
+      };
+      scanRecorder.current = recorder;
+      scanStartedAt.current = Date.now();
+      setScanSeconds(0);
+      setScanStage("recording");
+      recorder.start(1000);
+      scanTimer.current = setInterval(() => {
+        const seconds = Math.floor((Date.now() - scanStartedAt.current) / 1000);
+        setScanSeconds(seconds);
+        if (seconds >= 60 && scanRecorder.current?.state === "recording")
+          scanRecorder.current.stop();
+      }, 250);
+    } catch {
+      setScanError("Chrome could not start the recording. Please try again.");
+      setScanStage("failed");
+    }
+  }
+  function finishRoomRecording() {
+    if (scanSeconds < 30 || scanRecorder.current?.state !== "recording") return;
+    scanRecorder.current.stop();
+  }
+  async function runRoomScanJob(
+    scanId: Id<"roomScans">,
+    videoId: Id<"_storage">,
+  ) {
+    if (!cloud.client) throw new Error("Cloud session is still connecting.");
+    activeJobs.current.get("scan")?.();
+    const client = cloud.client;
+    const current = revision;
+    const view = currentSceneKey();
+    const requestId = crypto.randomUUID();
+    const jobId = await client.mutation(api.jobs.start, {
+      kind: "spatial",
+      input: JSON.stringify({
+        videoId,
+        scanId,
+        sceneKey: view,
+        categories: ["chair", "sofa", "table", "window", "door"],
+      }),
+      revision: current,
+      requestId,
+    });
+    await client.mutation(api.scans.attachJob, { id: scanId, jobId });
+    setScanStage("reconstructing");
+    return new Promise<void>((resolve, reject) => {
+      let done = false;
+      let unsubscribe = () => {};
+      const finish = () => {
+        done = true;
+        clearTimeout(timeout);
+        unsubscribe();
+        if (activeJobs.current.get("scan") === cancel)
+          activeJobs.current.delete("scan");
+      };
+      const cancel = () => {
+        if (done) return;
+        finish();
+        void client.mutation(api.jobs.cancel, { id: jobId }).catch(() => {});
+        reject(new Error("Room scan cancelled."));
+      };
+      const timeout = setTimeout(cancel, 1_260_000);
+      activeJobs.current.set("scan", cancel);
+      const watcher = client.watchQuery(api.jobs.get, { id: jobId });
+      unsubscribe = watcher.onUpdate(() => {
+        try {
+          const job = watcher.localQueryResult();
+          if (done || !job) return;
+          if (job.phase === "analyzing") setScanStage("analyzing");
+          else if (job.phase === "reconstructing")
+            setScanStage("reconstructing");
+          if (job.status === "succeeded") {
+            const result = JSON.parse(job.result || "{}");
+            if (!result.geometry)
+              throw new Error("SpatialLM returned no room geometry.");
+            const snapshot = parseSnapshot(
+              JSON.stringify(result),
+              "modal",
+              Date.now(),
+            );
+            setRoomSnapshot(snapshot);
+            setSnapshotSelection({ snapshotJobId: jobId });
+            setLiveEvaluation(null);
+            setRevision((value) => value + 1);
+            setScanStage("ready");
+            setSceneStatus("Room scan ready · Jev is reviewing visual fit");
+            finish();
+            resolve();
+          } else if (job.status === "failed" || job.status === "cancelled") {
+            throw new Error(job.error || "Room reconstruction failed.");
+          }
+        } catch (error) {
+          finish();
+          reject(error);
+        }
+      });
+    });
+  }
+  async function uploadRoomRecording(blob: Blob) {
+    if (!cloud.client || !cloud.ready) {
+      setScanError("Cloud session is still connecting. Please try again.");
+      setScanStage("failed");
+      return;
+    }
+    if (blob.size < 100_000 || blob.size > 60_000_000) {
+      setScanError("The room recording must be between 100 KB and 60 MB.");
+      setScanStage("failed");
+      return;
+    }
+    setScanStage("uploading");
+    setScanError("");
+    const view = currentSceneKey();
+    try {
+      const uploadUrl = await cloud.client.mutation(
+        api.scans.createUploadUrl,
+        {},
+      );
+      const response = await fetch(uploadUrl, {
+        method: "POST",
+        headers: { "Content-Type": blob.type || "video/webm" },
+        body: blob,
+      });
+      if (!response.ok) throw new Error("Room video upload failed.");
+      const { storageId } = (await response.json()) as {
+        storageId: Id<"_storage">;
+      };
+      const id = await cloud.client.mutation(api.scans.registerVideo, {
+        storageId,
+        sceneKey: view,
+        requestId: crypto.randomUUID(),
+      });
+      setRoomScanId(id);
+      setRoomSnapshot(null);
+      setSnapshotSelection({});
+      setLiveEvaluation(null);
+      await runRoomScanJob(id, storageId);
+      toast.success("Room reconstruction is ready for Jev.");
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Room reconstruction failed.";
+      if (message === "Room scan cancelled.") return;
+      setScanError(message);
+      setScanStage("failed");
+      toast.error(message);
+    }
+  }
+  async function retryRoomScan() {
+    if (!roomScanId || !cloud.client) return;
+    setScanError("");
+    setScanStage("reconstructing");
+    try {
+      const videoId = await cloud.client.mutation(api.scans.retrySource, {
+        id: roomScanId,
+      });
+      await runRoomScanJob(roomScanId, videoId);
+      toast.success("Room reconstruction is ready for Jev.");
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Room reconstruction failed.";
+      if (message === "Room scan cancelled.") return;
+      setScanError(message);
+      setScanStage("failed");
+    }
+  }
+  async function deleteRoomScan() {
+    if (roomScanId && cloud.client)
+      await cloud.client.mutation(api.scans.remove, { id: roomScanId });
+    activeJobs.current.get("scan")?.();
+    setRoomScanId(null);
+    setRoomSnapshot(null);
+    setSnapshotSelection({});
+    setLiveEvaluation(null);
+    setScanStage("guide");
+    setRevision((value) => value + 1);
+    setDialog(null);
+    toast.success("Room scan and its snapshot were deleted.");
+  }
   async function startLive() {
-    if (!stream.current || !cloud.client) return;
+    if (!stream.current) {
+      toast.error("Your camera is still starting. Try again in a moment.");
+      return;
+    }
+    if (!cloud.client) {
+      toast.error(
+        "The cloud session is still connecting. Try again in a moment.",
+      );
+      return;
+    }
     setJobMessage("Connecting live room editing…");
+    setLucyActive(false);
+    if (editedVideo.current) editedVideo.current.srcObject = null;
     try {
       lucy.current?.close();
       lucy.current = await connectLucy(
@@ -493,6 +803,7 @@ export default function Studio() {
           return token;
         },
         lucyPrompt(prompt, initialPlacement),
+        reference.startsWith("data:") ? reference : undefined,
         (s) => {
           if (editedVideo.current) {
             editedVideo.current.srcObject = s;
@@ -518,7 +829,8 @@ export default function Studio() {
     setPlacement((p) => ({ ...p, ...change }));
     setRevision((n) => n + 1);
     setSuggestion(false);
-    setPlaying(false);
+    setClipLoading(false);
+    setClipError(null);
     setJobMessage("");
     setClipUrl(null);
     activeJobs.current.get("h3")?.();
@@ -658,9 +970,13 @@ export default function Studio() {
     setBusy(false);
     if (source === "camera" && connections.lucy) void startLive();
     toast.success(
-      reference === "/chair.png"
-        ? "Example chair placed. Upload a reference to try your own item."
-        : "Reference placed. Drag it to explore your layout.",
+      source === "camera"
+        ? connections.lucy
+          ? "Connecting your camera directly to Decart Lucy."
+          : "Lucy is not connected. Check the Decart credential."
+        : reference === "/chair.png"
+          ? "Example chair placed. Upload a reference to try your own item."
+          : "Reference placed. Drag it to explore your layout.",
     );
   }
   async function capture(includeItem = true, transform = placement) {
@@ -693,7 +1009,7 @@ export default function Studio() {
       w * ratio,
       h * ratio,
     );
-    if (includeItem && placed && !useLucyOutput) {
+    if (includeItem && placed && !useLucyOutput && source !== "camera") {
       const item = await load(reference);
       const iw = 330 * transform.scale,
         ih = (iw * item.height) / item.width;
@@ -1102,7 +1418,7 @@ export default function Studio() {
                   </span>
                   <span className="glass-badge subtle">Visual planning</span>
                 </div>
-                {placed && !before && (
+                {placed && !before && source !== "camera" && (
                   <button
                     className={`placed-item ${evaluation.verdict}`}
                     aria-label="Move placed item. Use arrow keys to adjust position."
@@ -1136,12 +1452,7 @@ export default function Studio() {
                       }
                     }}
                   >
-                    <img
-                      src={reference}
-                      alt={prompt}
-                      draggable={false}
-                      style={{ opacity: lucyActive ? 0 : 1 }}
-                    />
+                    <img src={reference} alt={prompt} draggable={false} />
                     <span className="item-handle tl" />
                     <span className="item-handle tr" />
                     <span className="item-handle bl" />
@@ -1334,9 +1645,13 @@ export default function Studio() {
                 <p className="microcopy">
                   {lucyActive
                     ? "Lucy is generating your live view. Placement is requested; its rendered position is unverified."
-                    : reference === "/chair.png"
-                      ? "Preview uses an example chair. Add your own image to swap it."
-                      : "Your image becomes an editable reference in the room."}
+                    : source === "camera"
+                      ? connections.lucy
+                        ? "Your camera remains unchanged until Decart Lucy returns its generated stream."
+                        : "Connect Decart to generate furniture in the live camera view."
+                      : reference === "/chair.png"
+                        ? "Preview uses an example chair. Add your own image to swap it."
+                        : "Your image becomes an editable reference in the room."}
                 </p>
               </div>
               <section
@@ -1351,15 +1666,21 @@ export default function Studio() {
                 </p>
                 <small aria-live="polite">{sceneStatus}</small>
                 <Button
-                  variant="outline"
                   className="full"
-                  onClick={() => setDialog("settings")}
+                  onClick={() => openRoomScan(!!roomSnapshot)}
                 >
-                  <Layers2 />{" "}
-                  {roomSnapshot
-                    ? "Manage room snapshot"
-                    : "Attach room understanding"}
+                  <Camera /> Scan this room
                 </Button>
+                {roomSnapshot && (
+                  <Button
+                    variant="outline"
+                    className="full"
+                    onClick={() => setDialog("settings")}
+                  >
+                    <Layers2 /> Manage room snapshot
+                  </Button>
+                )}
+                <small>Room video is uploaded for GPU processing.</small>
               </section>
               {!placed ? (
                 <div className="empty-guidance">
@@ -1391,14 +1712,18 @@ export default function Studio() {
                 <div className="guidance">
                   <div className="guidance-heading">
                     <span className="eyebrow">ROOMIE’S TAKE</span>
-                    <span className={`verdict-label ${evaluation.verdict}`}>
-                      {evaluation.verdict === "good"
-                        ? "Nice fit"
-                        : evaluation.verdict === "adjust"
-                          ? "Try a tweak"
-                          : roomSnapshot
-                            ? "Needs alignment"
-                            : "Needs a scan"}
+                    <span
+                      className={`verdict-label ${evaluation.fit || evaluation.verdict}`}
+                    >
+                      {evaluation.fit
+                        ? `${evaluation.fit.toUpperCase()}${typeof evaluation.confidence === "number" && evaluation.confidence > 0 ? ` · ${Math.round(evaluation.confidence * 100)}%` : ""}`
+                        : evaluation.verdict === "good"
+                          ? "Nice fit"
+                          : evaluation.verdict === "adjust"
+                            ? "Try a tweak"
+                            : roomSnapshot
+                              ? "Needs alignment"
+                              : "Needs a scan"}
                     </span>
                   </div>
                   <h3>{evaluation.title}</h3>
@@ -1422,85 +1747,75 @@ export default function Studio() {
                   <div className="evaluation-caption">
                     {evaluation.provider}
                   </div>
+                  {roomSnapshot && (
+                    <div className="visual-estimate-note">
+                      Visual estimate only · metric calibration and
+                      camera-to-scan alignment are not yet available.
+                    </div>
+                  )}
                   {evaluation.adjustment && (
-                    <>
-                      <Button
-                        className="full"
-                        onClick={() => update(evaluation.adjustment!)}
-                      >
-                        <Check /> Apply suggested placement
-                      </Button>
-                      <Button
-                        variant="outline"
-                        className="full"
-                        onClick={showSuggestion}
-                      >
-                        <Video />
-                        Show me the suggestion
-                      </Button>
-                      {suggestion && (
-                        <div className="suggestion-preview">
-                          {clipUrl ? (
-                            <video
-                              className="generated-clip"
-                              src={clipUrl}
-                              controls
-                              autoPlay
-                              muted
-                              loop
-                              playsInline
-                            />
-                          ) : (
-                            <div
-                              className={`mini-scene ${playing ? "playing" : ""}`}
-                            >
-                              <img src={roomImage} alt="Current room" />
-                              <img
-                                className="mini-item"
-                                style={
-                                  {
-                                    "--from-x": `${placement.x}%`,
-                                    "--from-y": `${placement.y}%`,
-                                    "--to-x": `${evaluation.adjustment?.x || 38}%`,
-                                    "--to-y": `${evaluation.adjustment?.y || 68}%`,
-                                    "--from-size": `${27.5 * placement.scale}%`,
-                                    "--to-size": `${27.5 * (evaluation.adjustment?.scale || 1)}%`,
-                                    "--from-rotation": `${placement.rotation}deg`,
-                                    "--to-rotation": `${evaluation.adjustment?.rotation || 0}deg`,
-                                  } as CSSProperties
-                                }
-                                src={reference}
-                                alt="Suggested item movement"
-                              />
-                              <Button
-                                variant="secondary"
-                                size="icon"
-                                aria-label={
-                                  playing
-                                    ? "Pause suggestion"
-                                    : "Play suggestion"
-                                }
-                                onClick={() => setPlaying(!playing)}
-                              >
-                                {playing ? <Pause /> : <Play />}
-                              </Button>
-                            </div>
-                          )}
-                          <span>
-                            {clipUrl
-                              ? "H3 Max Turbo · generated suggestion"
-                              : "Illustrative movement · preview animation"}
-                          </span>
-                          <Button
-                            className="full"
-                            onClick={() => update(evaluation.adjustment!)}
-                          >
-                            Apply this placement
-                            <ArrowRight />
-                          </Button>
+                    <Button
+                      className="full"
+                      onClick={() => update(evaluation.adjustment!)}
+                    >
+                      <Check /> Apply suggested placement
+                    </Button>
+                  )}
+                  {connections.h3 && (
+                    <Button
+                      variant="outline"
+                      className="full"
+                      onClick={showSuggestion}
+                      disabled={
+                        clipLoading || (source === "camera" && !lucyActive)
+                      }
+                    >
+                      <Video />
+                      {clipLoading
+                        ? "Generating with H3 Max Turbo…"
+                        : source === "camera" && !lucyActive
+                          ? "Waiting for Lucy output…"
+                          : "Generate H3 suggestion clip"}
+                    </Button>
+                  )}
+                  {suggestion && (
+                    <div className="suggestion-preview">
+                      {clipUrl ? (
+                        <video
+                          className="generated-clip"
+                          src={clipUrl}
+                          controls
+                          autoPlay
+                          muted
+                          loop
+                          playsInline
+                        />
+                      ) : clipLoading ? (
+                        <div className="h3-status" role="status">
+                          H3 Max Turbo is generating the real suggestion clip…
+                        </div>
+                      ) : (
+                        <div className="h3-status error" role="alert">
+                          {clipError || "H3 Max Turbo did not return a clip."}
                         </div>
                       )}
-                    </>
+                      <span>
+                        {clipUrl
+                          ? "H3 Max Turbo · generated suggestion"
+                          : clipLoading
+                            ? "H3 Max Turbo · generation in progress"
+                            : "H3 Max Turbo · generation failed"}
+                      </span>
+                      {evaluation.adjustment && (
+                        <Button
+                          className="full"
+                          onClick={() => update(evaluation.adjustment!)}
+                        >
+                          Apply this placement
+                          <ArrowRight />
+                        </Button>
+                      )}
+                    </div>
                   )}
                   {jobMessage && (
                     <div className="job-status" role="status">
@@ -1674,10 +1989,17 @@ export default function Studio() {
       <Dialog
         open={dialog !== null && dialog !== "delete"}
         onOpenChange={(open) => {
-          if (!open) setDialog(null);
+          if (!open) {
+            if (dialog === "scan") stopScanCamera();
+            setDialog(null);
+          }
         }}
       >
-        <DialogContent className={dialog === "email" ? "wide-dialog" : ""}>
+        <DialogContent
+          className={
+            dialog === "email" || dialog === "scan" ? "wide-dialog" : ""
+          }
+        >
           <DialogHeader>
             <DialogTitle>
               {
@@ -1688,6 +2010,7 @@ export default function Studio() {
                     email: "A second pair of eyes",
                     settings: "Your studio connections",
                     privacy: "A little privacy, by design",
+                    scan: "Scan this room",
                     delete: "Delete this saved room?",
                   } as Record<string, string>
                 )[dialog || ""]
@@ -1702,11 +2025,221 @@ export default function Studio() {
                     ? "Review your room brief before sharing it with an expert."
                     : dialog === "settings"
                       ? "You can explore the full visual workflow in preview mode."
-                      : dialog === "delete"
-                        ? "This permanently removes the saved configuration and its images."
-                        : "You choose when your room leaves your device."}
+                      : dialog === "scan"
+                        ? "A slow walkthrough gives Roomie the room context Jev needs for visual-fit guidance."
+                        : dialog === "delete"
+                          ? "This permanently removes the saved configuration and its images."
+                          : "You choose when your room leaves your device."}
             </DialogDescription>
           </DialogHeader>
+          {dialog === "scan" && (
+            <div className="room-scan-flow">
+              <div className="scan-progress" aria-label="Room scan progress">
+                {[
+                  ["uploading", "Uploading"],
+                  ["reconstructing", "Reconstructing"],
+                  ["analyzing", "Analyzing"],
+                  ["ready", "Ready"],
+                ].map(([step, label]) => {
+                  const order = [
+                    "uploading",
+                    "reconstructing",
+                    "analyzing",
+                    "ready",
+                  ];
+                  const current = order.indexOf(scanStage);
+                  const index = order.indexOf(step);
+                  return (
+                    <div
+                      key={step}
+                      className={
+                        scanStage === "failed"
+                          ? ""
+                          : current >= index
+                            ? "active"
+                            : ""
+                      }
+                    >
+                      <span>
+                        {current > index || scanStage === "ready"
+                          ? "✓"
+                          : index + 1}
+                      </span>
+                      {label}
+                    </div>
+                  );
+                })}
+              </div>
+              {scanStage === "guide" && (
+                <div className="scan-guide">
+                  <div className="scan-illustration">
+                    <Camera size={34} />
+                    <span>30–60 sec</span>
+                  </div>
+                  <h3>Walk slowly around the whole living room.</h3>
+                  <ul>
+                    <li>Keep the phone upright and move at a steady pace.</li>
+                    <li>
+                      Show every wall, doorway, and large piece of furniture.
+                    </li>
+                    <li>Use bright, even light and avoid fast turns.</li>
+                  </ul>
+                  <div className="upload-disclosure">
+                    <ShieldCheck size={18} />
+                    <span>
+                      Your room video is uploaded to Convex and sent to the
+                      Modal GPU backend for SLAM3R reconstruction and SpatialLM
+                      analysis. It is deleted after a successful scan; failed
+                      uploads expire within 24 hours or can be deleted now.
+                    </span>
+                  </div>
+                  <Button className="full" onClick={requestScanCamera}>
+                    <Camera /> Allow camera and continue
+                  </Button>
+                </div>
+              )}
+              {scanStage === "permission" && (
+                <div className="scan-state" role="status">
+                  <div className="scan-spinner" />
+                  <h3>Waiting for camera permission…</h3>
+                  <p>Chrome may show a permission prompt.</p>
+                </div>
+              )}
+              {(scanStage === "preview" || scanStage === "recording") && (
+                <div className="scan-recorder">
+                  <div className="scan-video-wrap">
+                    <video ref={scanPreview} muted playsInline autoPlay />
+                    {scanStage === "recording" && (
+                      <span className="recording-badge">
+                        <i /> REC {Math.min(scanSeconds, 60)}s
+                      </span>
+                    )}
+                  </div>
+                  {scanStage === "preview" ? (
+                    <>
+                      <p>
+                        Start near a doorway, then pan and walk slowly around
+                        the room. Keep recording for at least 30 seconds.
+                      </p>
+                      <Button className="full" onClick={startRoomRecording}>
+                        <Video /> Start walkthrough
+                      </Button>
+                    </>
+                  ) : (
+                    <>
+                      <div className="scan-timer-track">
+                        <span
+                          style={{
+                            width: `${Math.min(100, (scanSeconds / 60) * 100)}%`,
+                          }}
+                        />
+                      </div>
+                      <p>
+                        {scanSeconds < 30
+                          ? `${30 - scanSeconds} seconds until you can finish`
+                          : "Enough coverage captured. Continue toward 60 seconds for more detail."}
+                      </p>
+                      <Button
+                        className="full"
+                        onClick={finishRoomRecording}
+                        disabled={scanSeconds < 30}
+                      >
+                        <Check /> Finish scan
+                      </Button>
+                    </>
+                  )}
+                </div>
+              )}
+              {["uploading", "reconstructing", "analyzing"].includes(
+                scanStage,
+              ) && (
+                <div className="scan-state" role="status" aria-live="polite">
+                  <div className="scan-spinner" />
+                  <h3>
+                    {scanStage === "uploading"
+                      ? "Uploading your walkthrough…"
+                      : scanStage === "reconstructing"
+                        ? "Reconstructing the room…"
+                        : "SpatialLM is analyzing the room…"}
+                  </h3>
+                  <p>
+                    {scanStage === "uploading"
+                      ? "Keep this tab open while the encrypted upload completes."
+                      : scanStage === "reconstructing"
+                        ? "SLAM3R is converting video frames into a .ply point cloud on the Modal GPU."
+                        : "SpatialLM is turning the point cloud into compact walls, openings, and furniture geometry."}
+                  </p>
+                  {roomScanId && (
+                    <Button
+                      variant="ghost"
+                      onClick={() => void deleteRoomScan()}
+                    >
+                      <Trash2 /> Cancel and delete scan
+                    </Button>
+                  )}
+                </div>
+              )}
+              {scanStage === "ready" && (
+                <div className="scan-state ready" role="status">
+                  <div className="ready-mark">
+                    <Check />
+                  </div>
+                  <h3>Your room is ready.</h3>
+                  <p>
+                    {roomSnapshot
+                      ? roomSummary(roomSnapshot)
+                      : "The compact room snapshot is saved in Convex."}
+                  </p>
+                  <div className="visual-estimate-note">
+                    Jev guidance is a visual estimate until metric calibration
+                    and camera-to-scan alignment are available.
+                  </div>
+                  <div className="scan-actions">
+                    <Button
+                      variant="outline"
+                      onClick={() => openRoomScan(true)}
+                    >
+                      <RotateCcw /> Replace scan
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      onClick={() => void deleteRoomScan()}
+                    >
+                      <Trash2 /> Delete scan
+                    </Button>
+                  </div>
+                </div>
+              )}
+              {scanStage === "failed" && (
+                <div className="scan-state failed" role="alert">
+                  <CircleHelp size={32} />
+                  <h3>We couldn’t finish this scan.</h3>
+                  <p>{scanError || "Try a slower, brighter walkthrough."}</p>
+                  <div className="scan-actions">
+                    {roomScanId && (
+                      <Button onClick={() => void retryRoomScan()}>
+                        <RotateCcw /> Retry processing
+                      </Button>
+                    )}
+                    <Button
+                      variant="outline"
+                      onClick={() => openRoomScan(true)}
+                    >
+                      <Camera /> Replace scan
+                    </Button>
+                    {roomScanId && (
+                      <Button
+                        variant="ghost"
+                        onClick={() => void deleteRoomScan()}
+                      >
+                        <Trash2 /> Delete scan
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
           {dialog === "room" && (
             <div className="dialog-stack">
               <Button
@@ -1820,16 +2353,20 @@ export default function Studio() {
                 {roomSnapshot && (
                   <Button
                     variant="ghost"
-                    onClick={() => {
-                      scanEpoch.current++;
-                      activeJobs.current.get("spatial")?.();
-                      setJobMessage("");
-                      setSnapshotSelection({});
-                      setRoomSnapshot(null);
-                      setRevision((n) => n + 1);
-                    }}
+                    onClick={() =>
+                      roomScanId
+                        ? void deleteRoomScan()
+                        : (() => {
+                            scanEpoch.current++;
+                            activeJobs.current.get("spatial")?.();
+                            setJobMessage("");
+                            setSnapshotSelection({});
+                            setRoomSnapshot(null);
+                            setRevision((n) => n + 1);
+                          })()
+                    }
                   >
-                    Detach room snapshot
+                    {roomScanId ? "Delete room scan" : "Detach room snapshot"}
                   </Button>
                 )}
               </section>
@@ -1857,6 +2394,14 @@ export default function Studio() {
                 Cloud saves belong to this browser’s private guest session. Live
                 services become available when their credentials are connected.
               </p>
+              <Button onClick={() => openRoomScan(!!roomSnapshot)}>
+                <Camera /> Scan this room
+              </Button>
+              <small>
+                Record a 30–60 second walkthrough. The video is uploaded to
+                Convex and sent to Modal for reconstruction and SpatialLM
+                analysis.
+              </small>
               <Button
                 variant="outline"
                 onClick={() => scanFile.current?.click()}
@@ -1898,6 +2443,13 @@ export default function Studio() {
                 will be processed by the connected providers to fulfill your
                 request. Unsaved cloud captures expire after 24 hours; saved
                 rooms remain until deleted.
+              </p>
+              <p>
+                A room scan uploads the recorded walkthrough to private Convex
+                storage, then sends it to the Modal GPU backend for SLAM3R and
+                SpatialLM processing. The video is deleted after successful
+                analysis. Failed scan videos expire within 24 hours or when you
+                choose Delete scan.
               </p>
               <p>
                 Roomie does not use your room for model training. Provider

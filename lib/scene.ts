@@ -78,6 +78,9 @@ export function evaluateScene(scene: SceneState): Evaluation {
   return {
     ...baseline,
     verdict: baseline.adjustment ? "adjust" : "uncertain",
+    fit: baseline.adjustment ? "red" : "amber",
+    confidence: 0,
+    visualEstimate: true,
     title: baseline.adjustment
       ? baseline.title
       : "Your room scan is part of the picture.",
@@ -89,7 +92,7 @@ export function evaluateScene(scene: SceneState): Evaluation {
       { label: "Measured clearance", status: "unknown" },
       { label: "Lucy output verified", status: "unknown" },
     ],
-    provider: "Room scan + intended placement · alignment pending",
+    provider: "Room scan + intended placement · visual estimate",
   };
 }
 export function lucyPrompt(description: string, placement: Placement): string {

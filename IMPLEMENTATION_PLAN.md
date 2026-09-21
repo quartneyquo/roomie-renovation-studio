@@ -4,7 +4,7 @@
 
 This document records the agreed plan. The first Chrome studio implementation is now in the workspace; see README.md for the exact implemented scope, verification, and remaining live-integration work.
 
-The studio now supports camera/photo input, editable reference placement, conservative visual checks, suggestions in preview mode, private Convex saving/reopening, screenshots, sharing, and reviewed email handoff. Live provider adapters and a Modal deployment definition are prepared. Credentials, live model smoke tests, CUDA deployment, scan reconstruction and camera-aligned 3D constraints remain outstanding.
+The studio now supports camera/photo input, editable reference placement, conservative visual checks, suggestions, private Convex saving/reopening, screenshots, sharing, reviewed email handoff, and a guided mobile room scan. The Modal L4 pipeline reconstructs walkthrough video with SLAM3R and runs SpatialLM; Convex stores the compact snapshot and Jev returns green, amber, or red visual-fit guidance. A real-room end-to-end scan, camera-to-scan alignment, and metric calibration remain outstanding.
 
 ## Product goal
 
@@ -30,7 +30,7 @@ Each model has one clear responsibility.
 ### Lucy 2.5
 
 - Purpose: live visual editing/compositing of the requested item into the camera feed.
-- Expected fal endpoint: `decart/lucy-2-5/realtime`.
+- Provider: Decart directly through `@decartai/sdk` with a short-lived client token minted from the Convex-held `DECART_API_KEY`.
 - Inputs: live video, text prompt, and optional reference image.
 - Output: continuously edited live video.
 - Lucy output is a visualization. It is not the authoritative saved placement geometry.
@@ -477,7 +477,7 @@ The demo must remain operable in mock-provider mode.
 - Completed Modal PLY jobs can attach only to their originating view. Precomputed SpatialLM JSON can be imported with explicit imported provenance. Switching room views detaches the snapshot; saved configurations embed and restore it.
 - Jev reads the current persisted scene, room structure, visual checks, and supplied adjustment candidates. Applying an adjustment changes the shared placement and updates Lucy's prompt. Both client and server reject stale evaluations.
 - Current flags remain cameraAligned=false, metricScaleVerified=false, and observedInOutput=false. Jev cannot claim measured fit from this state. No generated-output perception is implied by the attached physical-room scan.
-- Follow-up phases: walkthrough reconstruction; calibration/camera registration; sampled Lucy-output detection and tracking; continuous camera pose tracking. These require further implementation and live validation. Streaming throughput and prompt response latency must be measured separately.
+- The guided 30–60 second walkthrough, temporary video upload, SLAM3R `.ply` reconstruction, SpatialLM analysis, and Convex snapshot persistence are implemented. Follow-up phases are calibration/camera registration, sampled Lucy-output detection and tracking, and continuous camera pose tracking. These require further implementation and live validation.
 
 ## Remaining decisions
 
@@ -526,7 +526,7 @@ If none of the endpoint options is reliable by the integration checkpoint, gener
 
 ## References
 
-- Lucy 2.5: <https://fal.ai/lucy-2.5>
+- Lucy 2.5: <https://docs.platform.decart.ai/models/realtime/video-editing>
 - MiniMax H3 Max Turbo image-to-video: <https://fal.ai/models/minimax/h3-max-turbo/image-to-video>
 - SpatialLM: <https://github.com/manycore-research/SpatialLM>
 - Function2Scene: <https://function2scene.github.io/>

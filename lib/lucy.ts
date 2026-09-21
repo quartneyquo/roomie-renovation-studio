@@ -1,117 +1,71 @@
-import { createFalClient } from "@fal-ai/client";
+import type { DecartSDKError, RealTimeClient } from "@decartai/sdk";
+
 export type LucySession = {
   close: () => void;
   update: (prompt: string, reference?: string) => void;
 };
-/** fal provides scoped signaling; camera media is exchanged over WebRTC. */
+
+/** Connect a camera directly to Decart Lucy using a short-lived client token. */
 export async function connectLucy(
   stream: MediaStream,
   tokenProvider: () => Promise<string>,
   prompt: string,
+  reference: string | undefined,
   onStream: (stream: MediaStream) => void,
   onError: (error: string) => void,
 ): Promise<LucySession> {
-  const fal = createFalClient({});
-  const peer = new RTCPeerConnection();
+  const { createDecartClient, models } = await import("@decartai/sdk");
+  const apiKey = await tokenProvider();
+  const client = createDecartClient({
+    apiKey,
+    integration: "roomie-studio",
+  });
   let closed = false;
-  const pending: RTCIceCandidateInit[] = [];
+  let session: RealTimeClient | null = null;
+
   const fail = (error: unknown) => {
-    if (!closed)
-      onError(
-        error instanceof Error ? error.message : "Live preview disconnected.",
-      );
+    if (closed) return;
+    onError(
+      error instanceof Error
+        ? error.message
+        : "Lucy live editing disconnected.",
+    );
   };
-  const connection = fal.realtime.connect<
-    Record<string, unknown>,
-    {
-      type?: string;
-      sdp?: string;
-      candidate?: RTCIceCandidateInit;
-      iceServers?: RTCIceServer[];
-      error?: unknown;
-    }
-  >("decart/lucy-2-5/realtime", {
-    connectionKey: crypto.randomUUID(),
-    tokenProvider,
-    tokenExpirationSeconds: 120,
-    throttleInterval: 0,
-    maxBuffering: 60,
-    onError: fail,
-    onResult: (result) => {
-      void (async () => {
-        if (closed) return;
-        if (result.error)
-          throw new Error("Lucy could not create this preview.");
-        if (result.iceServers)
-          peer.setConfiguration({ iceServers: result.iceServers });
-        if (result.type === "answer" && result.sdp) {
-          await peer.setRemoteDescription({ type: "answer", sdp: result.sdp });
-          for (const candidate of pending.splice(0))
-            await peer.addIceCandidate(candidate);
-        }
-        if (result.type === "offer" && result.sdp) {
-          await peer.setRemoteDescription({ type: "offer", sdp: result.sdp });
-          const answer = await peer.createAnswer();
-          await peer.setLocalDescription(answer);
-          connection.send({ type: "answer", sdp: answer.sdp });
-        }
-        if (result.candidate) {
-          if (peer.remoteDescription)
-            await peer.addIceCandidate(result.candidate);
-          else pending.push(result.candidate);
-        }
-      })().catch(fail);
+
+  session = await client.realtime.connect(stream, {
+    model: models.realtime("lucy-2.5"),
+    preferredVideoCodec: "vp8",
+    onRemoteStream: onStream,
+    initialState: {
+      prompt: { text: prompt, enhance: false },
+      ...(reference ? { image: reference } : {}),
     },
   });
-  peer.ontrack = (event) => {
-    if (event.streams[0]) onStream(event.streams[0]);
-    else onStream(new MediaStream([event.track]));
-  };
-  peer.onicecandidate = (event) => {
-    if (event.candidate)
-      connection.send({
-        type: "candidate",
-        candidate: event.candidate.toJSON(),
-      });
-  };
-  peer.onconnectionstatechange = () => {
-    if (["failed", "disconnected"].includes(peer.connectionState))
-      fail(
-        new Error(
-          "Live connection interrupted. Your original camera is still available.",
-        ),
-      );
-  };
-  for (const track of stream.getVideoTracks()) peer.addTrack(track, stream);
-  const offer = await peer.createOffer();
-  await peer.setLocalDescription(offer);
-  connection.send({
-    type: "offer",
-    sdp: offer.sdp,
-    prompt,
-    enable_prompt_expansion: false,
-  });
-  const timer = setTimeout(() => {
-    if (peer.connectionState !== "connected")
-      fail(
-        new Error(
-          "Lucy connection timed out. Live signaling needs verification with your fal credentials.",
-        ),
-      );
-  }, 25000);
+
+  const handleError = (error: DecartSDKError) => fail(error);
+  const handleEnded = ({ reason }: { reason: string }) =>
+    fail(new Error(reason || "Lucy ended the live editing session."));
+  session.on("error", handleError);
+  session.on("sessionEnded", handleEnded);
+
   return {
-    update: (next, reference) =>
-      connection.send({
-        type: "update",
-        prompt: next,
-        ...(reference ? { reference_image_url: reference } : {}),
-        enable_prompt_expansion: false,
-      }),
+    update: (next, nextReference) => {
+      if (!session || closed) return;
+      void session
+        .set({
+          prompt: next,
+          image: nextReference ?? null,
+          enhance: false,
+        })
+        .catch(fail);
+    },
     close: () => {
+      if (closed) return;
       closed = true;
-      clearTimeout(timer);
-      connection.close();
-      peer.close();
+      session?.off("error", handleError);
+      session?.off("sessionEnded", handleEnded);
+      session?.disconnect();
+      session = null;
     },
   };
 }
