@@ -109,6 +109,9 @@ export default function Studio() {
     [sources, setSources] = useState<ResearchSource[]>([]),
     [contacts, setContacts] = useState<Contact[]>([]),
     [jobMessage, setJobMessage] = useState("");
+  const [jevRunState, setJevRunState] = useState<
+    "idle" | "checking" | "ready" | "fallback"
+  >("idle");
   const [clipUrl, setClipUrl] = useState<string | null>(null),
     [clipLoading, setClipLoading] = useState(false),
     [clipError, setClipError] = useState<string | null>(null),
@@ -208,6 +211,7 @@ export default function Studio() {
     setRoomSnapshot(null);
     setSnapshotSelection({});
     setLiveEvaluation(null);
+    setJevRunState("idle");
     setSceneStatus("New room view · attach a scan");
   }
   async function syncScene() {
@@ -234,6 +238,15 @@ export default function Studio() {
         );
   }, [cloud.ready, cloud.client]);
   useEffect(() => {
+    if (!placed) {
+      setJevRunState("idle");
+      return;
+    }
+    if (!connections.jev) {
+      setJevRunState("fallback");
+      return;
+    }
+    setJevRunState("checking");
     if (!cloud.ready) return;
     const current = revision;
     const view = currentSceneKey();
@@ -267,11 +280,13 @@ export default function Studio() {
             r?.evaluation
           ) {
             setLiveEvaluation(r.evaluation as Evaluation);
+            setJevRunState("ready");
             setSceneStatus(`Jev reviewed scene revision ${current}`);
           }
         })
         .catch((e) => {
           if (valid && latestRevision.current === current) {
+            setJevRunState("fallback");
             setSceneStatus("Review unavailable · showing local guidance");
             toast.error(e.message);
           }
@@ -1727,6 +1742,23 @@ export default function Studio() {
                               ? "Needs alignment"
                               : "Needs a scan"}
                     </span>
+                  </div>
+                  <div
+                    className={`jev-run-status ${jevRunState}`}
+                    aria-live="polite"
+                  >
+                    {jevRunState === "checking" && (
+                      <span className="jev-pulse" aria-hidden="true" />
+                    )}
+                    {jevRunState === "checking"
+                      ? "Jev is checking this placement automatically…"
+                      : jevRunState === "ready"
+                        ? "Jev checked this placement automatically."
+                        : jevRunState === "fallback"
+                          ? connections.jev
+                            ? "Jev is unavailable; showing local visual guidance."
+                            : "Connect Jev to add automatic visual-fit feedback."
+                          : "Place an item to have Jev check the fit automatically."}
                   </div>
                   <h3>{evaluation.title}</h3>
                   <p>{evaluation.explanation}</p>

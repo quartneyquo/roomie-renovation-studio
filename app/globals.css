@@ -680,6 +680,35 @@ a:focus-visible {
   font-size: 10px;
   letter-spacing: 1.5px;
 }
+.jev-run-status {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 11px;
+  color: #887368;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.jev-run-status.ready {
+  color: #4d704f;
+}
+.jev-run-status.fallback {
+  color: #966746;
+}
+.jev-pulse {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #9a354f;
+  animation: jev-pulse 1s ease-in-out infinite;
+}
+@keyframes jev-pulse {
+  50% {
+    opacity: 0.32;
+    transform: scale(0.72);
+  }
+}
 .verdict-label {
   border-radius: 20px;
   font-size: 10px;
