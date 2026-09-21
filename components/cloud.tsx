@@ -16,7 +16,11 @@ import { ConvexAuthProvider, useAuthActions } from "@convex-dev/auth/react";
 import { api } from "@/convex/_generated/api";
 import type { SavedRoom } from "@/lib/room";
 import type { Id } from "@/convex/_generated/dataModel";
-const url = process.env.NEXT_PUBLIC_CONVEX_URL;
+// Public deployment address, never a provider credential. The fallback keeps
+// static client bundles connected when hosting supplies env vars only at runtime.
+const url =
+  process.env.NEXT_PUBLIC_CONVEX_URL ||
+  "https://fleet-cheetah-120.convex.cloud";
 const client = url ? new ConvexReactClient(url) : null;
 type Cloud = {
   ready: boolean;

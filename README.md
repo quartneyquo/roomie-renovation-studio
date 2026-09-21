@@ -9,7 +9,7 @@ npm install
 npm run dev
 ```
 
-The local preview uses the URL printed by Vite (currently `http://localhost:5173`). `.env.local` contains the development Convex deployment; it is ignored by Git. Set `NEXT_PUBLIC_CONVEX_URL` when using another checkout. This URL is public configuration, never a provider secret.
+The local preview uses the URL printed by Vite (currently `http://localhost:5173`). `.env.local` contains the development Convex deployment; it is ignored by Git. The public development endpoint is also the client fallback. Set `NEXT_PUBLIC_CONVEX_URL` at build time to use a different deployment. This URL is public configuration, never a provider secret.
 
 ```sh
 npx convex dev

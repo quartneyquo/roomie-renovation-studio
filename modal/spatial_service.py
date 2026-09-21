@@ -36,7 +36,7 @@ secret = modal.Secret.from_name("roomie-spatial")
 def infer(point_cloud_url: str, categories: list[str], request_id: str):
     import httpx
     import numpy as np
-    from spatiallm.layout import Layout
+    from spatiallm import Layout
     parsed = urlparse(point_cloud_url)
     allowed = {host.strip() for host in os.environ["ALLOWED_INPUT_HOSTS"].split(",")}
     if parsed.scheme != "https" or parsed.hostname not in allowed or parsed.username or parsed.port:

@@ -59,6 +59,7 @@ import {
 } from "@/lib/room";
 
 import Link from "next/link";
+import { DeleteRoom } from "@/components/delete-room";
 import { registerRoomTools } from "@/lib/webmcp";
 import { useCloud, uploadImage } from "@/components/cloud";
 import { api } from "@/convex/_generated/api";
@@ -737,9 +738,6 @@ export default function Studio() {
     }
   }
   useEffect(() => {
-    if (tab === "saved" && stream.current) void freezeCamera();
-  }, [tab]);
-  useEffect(() => {
     const hide = () => {
       if (document.hidden && stream.current) void freezeCamera();
     };
@@ -811,7 +809,13 @@ export default function Studio() {
             roomie<span className="brand-dot">.</span>
           </span>
         </Link>
-        <Tabs value={tab} onValueChange={setTab}>
+        <Tabs
+          value={tab}
+          onValueChange={async (next) => {
+            if (next === "saved" && stream.current) await freezeCamera();
+            setTab(next);
+          }}
+        >
           <TabsList className="main-tabs">
             <TabsTrigger value="studio">
               <Layers2 />
@@ -1480,8 +1484,13 @@ export default function Studio() {
           e.target.value = "";
         }}
       />
+      <DeleteRoom
+        open={dialog === "delete"}
+        onClose={() => setDialog(null)}
+        onConfirm={removeSaved}
+      />
       <Dialog
-        open={dialog !== null}
+        open={dialog !== null && dialog !== "delete"}
         onOpenChange={(open) => {
           if (!open) setDialog(null);
         }}
@@ -1609,16 +1618,6 @@ export default function Studio() {
                   ? "Saved privately in your browser’s guest session. Keep this browser data to retain access; download a copy for safekeeping."
                   : "Cloud session is connecting. Your current view stays on this device until saved."}
               </small>
-            </div>
-          )}
-          {dialog === "delete" && (
-            <div className="dialog-stack">
-              <Button variant="destructive" onClick={removeSaved}>
-                Delete room
-              </Button>
-              <Button variant="outline" onClick={() => setDialog(null)}>
-                Keep it
-              </Button>
             </div>
           )}
           {dialog === "settings" && (
