@@ -470,6 +470,15 @@ The demo must remain operable in mock-provider mode.
 - Validate measurement accuracy and ergonomic rules with qualified experts.
 - Establish device-tier performance targets for latency, thermal load, battery use, and bandwidth.
 
+## Implemented iteration: shared spatial context (September 21, 2026)
+
+- Lucy remains responsible for live generated appearance. Its output is not a measurable 3D object.
+- Owner-scoped `sceneStates` in Convex combine an attached SpatialLM snapshot with intended Lucy item description and screen-space transform.
+- Completed Modal PLY jobs can attach only to their originating view. Precomputed SpatialLM JSON can be imported with explicit imported provenance. Switching room views detaches the snapshot; saved configurations embed and restore it.
+- Jev reads the current persisted scene, room structure, visual checks, and supplied adjustment candidates. Applying an adjustment changes the shared placement and updates Lucy's prompt. Both client and server reject stale evaluations.
+- Current flags remain cameraAligned=false, metricScaleVerified=false, and observedInOutput=false. Jev cannot claim measured fit from this state. No generated-output perception is implied by the attached physical-room scan.
+- Follow-up phases: walkthrough reconstruction; calibration/camera registration; sampled Lucy-output detection and tracking; continuous camera pose tracking. These require further implementation and live validation. Streaming throughput and prompt response latency must be measured separately.
+
 ## Remaining decisions
 
 No product-scope decisions remain. Implementation still requires the provider credentials and Modal account token when live integrations begin.

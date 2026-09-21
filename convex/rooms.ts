@@ -13,6 +13,7 @@ import {
 } from "convex-helpers/server/customFunctions";
 import { evaluation, placement, source } from "./schema";
 import type { Id } from "./_generated/dataModel";
+import type { SceneState } from "../lib/scene";
 export async function user(ctx: Pick<QueryCtx, "auth">) {
   const id = await getAuthUserId(ctx);
   if (!id) throw new ConvexError("Please reconnect your private session.");
@@ -74,6 +75,7 @@ export const save = ownerMutation({
     referenceId: v.id("_storage"),
     roomImageId: v.id("_storage"),
     screenshotId: v.id("_storage"),
+    sceneKey: v.optional(v.string()),
   },
   returns: v.id("savedConfigurations"),
   handler: async (ctx, a) => {
@@ -115,7 +117,34 @@ export const save = ownerMutation({
         throw new ConvexError("Upload a fresh copy for this room.");
       await ctx.db.patch(file._id, { saved: true });
     }
-    return ctx.db.insert("savedConfigurations", { ...a, ownerId: ctx.ownerId });
+    const { sceneKey, ...configuration } = a;
+    let sceneState: string | undefined;
+    if (sceneKey) {
+      const scene = await ctx.db
+        .query("sceneStates")
+        .withIndex("by_ownerId_and_sceneKey", (q) =>
+          q.eq("ownerId", ctx.ownerId).eq("sceneKey", sceneKey),
+        )
+        .unique();
+      if (!scene || scene.revision !== a.revision)
+        throw new ConvexError("Room understanding changed. Please save again.");
+      const state = JSON.parse(scene.state) as SceneState;
+      if (
+        state.lucyObject.description !== a.prompt ||
+        (["x", "y", "scale", "rotation"] as const).some(
+          (key) => state.lucyObject.placement[key] !== a.placement[key],
+        )
+      )
+        throw new ConvexError(
+          "Saved placement does not match the current scene.",
+        );
+      sceneState = scene.state;
+    }
+    return ctx.db.insert("savedConfigurations", {
+      ...configuration,
+      ...(sceneState ? { sceneState } : {}),
+      ownerId: ctx.ownerId,
+    });
   },
 });
 const savedView = v.object({
@@ -130,6 +159,7 @@ const savedView = v.object({
   roomImage: v.string(),
   screenshot: v.string(),
   createdAt: v.number(),
+  sceneState: v.optional(v.string()),
 });
 export const list = ownerQuery({
   args: {},
@@ -149,6 +179,7 @@ export const list = ownerQuery({
         source: r.source,
         revision: r.revision,
         evaluation: r.evaluation,
+        ...(r.sceneState ? { sceneState: r.sceneState } : {}),
         createdAt: r._creationTime,
         reference: (await ctx.storage.getUrl(r.referenceId))!,
         roomImage: (await ctx.storage.getUrl(r.roomImageId))!,
@@ -196,7 +227,11 @@ export const expire = internalMutation({
       await ctx.storage.delete(file.storageId);
       await ctx.db.delete(file._id);
     }
-    for (const table of ["providerJobs", "researchSources"] as const) {
+    for (const table of [
+      "providerJobs",
+      "researchSources",
+      "sceneStates",
+    ] as const) {
       for (const row of await ctx.db
         .query(table)
         .withIndex("by_expiresAt", (q) => q.lt("expiresAt", Date.now()))

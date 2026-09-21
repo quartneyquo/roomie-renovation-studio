@@ -51,6 +51,15 @@ export const jobStatus = v.union(
 );
 export default defineSchema({
   ...authTables,
+  sceneStates: defineTable({
+    ownerId: v.id("users"),
+    sceneKey: v.string(),
+    revision: v.number(),
+    state: v.string(),
+    expiresAt: v.number(),
+  })
+    .index("by_ownerId_and_sceneKey", ["ownerId", "sceneKey"])
+    .index("by_expiresAt", ["expiresAt"]),
   usageBuckets: defineTable({ key: v.string(), count: v.number() }).index(
     "by_key",
     ["key"],
@@ -67,6 +76,7 @@ export default defineSchema({
     referenceId: v.id("_storage"),
     roomImageId: v.id("_storage"),
     screenshotId: v.id("_storage"),
+    sceneState: v.optional(v.string()),
   })
     .index("by_ownerId", ["ownerId"])
     .index("by_ownerId_and_requestId", ["ownerId", "requestId"]),

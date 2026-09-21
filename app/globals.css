@@ -1248,3 +1248,24 @@ a:focus-visible {
     transform: translate(-50%, -50%) rotate(var(--to-rotation));
   }
 }
+/* Room evidence sits beside the idea so perception state stays visible. */
+.scene-understanding {
+  padding: 18px;
+  border: 1px solid #d8b8ba;
+  border-radius: 16px;
+  background: #fff8f4;
+  margin: 16px 0;
+  color: #5c2737;
+}
+.scene-understanding p {
+  margin: 8px 0;
+  font-size: 14px;
+  line-height: 1.55;
+}
+.scene-understanding small {
+  display: block;
+  font-size: 12px;
+  line-height: 1.55;
+  margin-bottom: 12px;
+  color: #725b61;
+}

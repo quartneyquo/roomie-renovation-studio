@@ -137,6 +137,24 @@ export const patch = internalMutation({
     const job = await ctx.db.get(id);
     if (!job || ["cancelled", "succeeded", "failed"].includes(job.status))
       return false;
+    if (job.kind === "jev" && a.status === "succeeded") {
+      const input = JSON.parse(job.input);
+      if (typeof input.sceneKey === "string") {
+        const scene = await ctx.db
+          .query("sceneStates")
+          .withIndex("by_ownerId_and_sceneKey", (q) =>
+            q.eq("ownerId", job.ownerId).eq("sceneKey", input.sceneKey),
+          )
+          .unique();
+        if (!scene || scene.revision !== job.revision) {
+          await ctx.db.patch(id, {
+            status: "cancelled",
+            updatedAt: Date.now(),
+          });
+          return false;
+        }
+      }
+    }
     await ctx.db.patch(id, {
       ...a,
       updatedAt: Date.now(),

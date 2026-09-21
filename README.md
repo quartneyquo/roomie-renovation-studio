@@ -54,7 +54,15 @@ See [Modal setup](modal/README.md) for the prepared CUDA service.
 
 ## Current boundaries
 
-- **No provider credentials were available during implementation.** No real Lucy output, Jev decision, H3 video, Firecrawl search, or AgentMail email was claimed or sent. Mock behavior is labeled in the UI.
+### Room understanding → Jev → Lucy (implemented first iteration)
+
+The studio persists an owner-scoped, versioned scene in Convex. It combines a SpatialLM snapshot with the user's intended Lucy object description and screen-space placement. Attach a completed PLY scan through Modal, or use **Attach SpatialLM JSON snapshot** in Settings for an existing snapshot of the current room. The JSON must contain `model` and `geometry` with `walls`, `doors`, `windows`, and `bboxes` arrays, at most 100 entities per array and 120 KB total. Raw SpatialLM layout text must first be converted using its Layout parser; it is not this JSON interchange format.
+
+Convex loads the scene server-side when evaluating with Jev. Jev receives the structured room, provenance, requested item, visual constraints, and supplied candidate adjustments. Apply suggested placement updates the same state used to construct Lucy prompts. Results are revision-bound on both client and server. Local guidance uses the same snapshot when Jev credentials are unavailable. Saved rooms embed the snapshot so it survives transient job cleanup; opening a different camera/photo clears it, and reopening a saved room restores its own snapshot. A PLY job cannot attach to a different view or owner.
+
+Imported and current Modal snapshots do not establish camera alignment or metric scale. These flags remain false; Lucy output observation remains false. Room geometry informs Jev but does not verify the generated pixels or physical fit. Automatic walkthrough reconstruction, camera registration, and sampling Lucy output for perception are follow-up phases, not implemented in this iteration. Model/provider latency has not been measured without working credentials.
+
+- The scene-state iteration was smoke-tested against live Jev (`jev-1.13.0`) with an explicitly synthetic imported room fixture. Jev returned an uncertain verdict and requested verification of the generated object. The browser now reports fal and Firecrawl configured; their live media/research behavior has not been verified in this iteration. Modal and AgentMail still report unconfigured. No email was sent.
 - Text-only arbitrary object generation requires Lucy and a live camera. Without that service, the preview uses the example chair or the user's reference image; it does not pretend the chair was generated from an arbitrary prompt.
 - Placement transforms are normalized 2D image coordinates and in-plane rotation, not 3D world poses. The fallback guidance is an image-space demonstration, not a complete Function2Scene constraint engine.
 - Modal deployment and GPU inference are pending account credentials. Point-cloud input is supported by the adapter. Walkthrough-to-point-cloud reconstruction, camera alignment, depth/occlusion tracking, and calibrated 3D collision/clearance checks are not implemented. Scan results cannot be applied to arbitrary webcam views without alignment.
@@ -64,6 +72,6 @@ See [Modal setup](modal/README.md) for the prepared CUDA service.
 
 ## Validation
 
-Nine automated tests cover private data access, foreign asset rejection, full-transform persistence, idempotent saves, deletion/retention, email claim ownership, duplicate email approvals, stale-job cancellation, and conservative real-room evaluation. Browser QA covers placement, adjustment, applying suggestions, before/after, actual cloud save and reopen, and the reviewed email preview. WebMCP valid and invalid inputs were exercised against the live preview.
+Fifteen automated tests cover private data access, foreign asset rejection, full-transform persistence, idempotent saves, deletion/retention, email claim ownership, duplicate email approvals, stale-job cancellation, scene revision ordering, snapshot ownership/view binding, persistence after cleanup, and room evidence reaching the Jev adapter. The automated Jev-to-Lucy test mocks the provider response. Browser QA additionally verified snapshot import, live Jev review, applying a visual adjustment, cloud save, and snapshot restoration using a clearly labeled synthetic fixture. This does not validate physical-room reconstruction or Lucy's generated placement.
 
 No training or fine-tuning is needed or performed.

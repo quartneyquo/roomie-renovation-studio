@@ -50,7 +50,6 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Toaster, toast } from "sonner";
 import {
   clamp,
-  evaluatePlacement,
   initialPlacement,
   type Placement,
   type RoomSource,
@@ -65,6 +64,14 @@ import { useCloud, uploadImage } from "@/components/cloud";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { connectLucy, type LucySession } from "@/lib/lucy";
+import {
+  evaluateScene,
+  lucyPrompt,
+  parseSnapshot,
+  roomSummary,
+  type SceneState,
+  type SpatialSnapshot,
+} from "@/lib/scene";
 type Connections = {
   jev: boolean;
   h3: boolean;
@@ -108,8 +115,19 @@ export default function Studio() {
     editedVideo = useRef<HTMLVideoElement>(null),
     mounted = useRef(true);
   const jobEpoch = useRef<Record<string, number>>({});
-  const previousPlacement = useRef(initialPlacement);
   const scanFile = useRef<HTMLInputElement>(null);
+  const scanEpoch = useRef(0);
+  const snapshotFile = useRef<HTMLInputElement>(null);
+  const sceneKey = useRef("");
+  const [roomSnapshot, setRoomSnapshot] = useState<SpatialSnapshot | null>(
+    null,
+  );
+  const [snapshotSelection, setSnapshotSelection] = useState<{
+    snapshotJobId?: Id<"providerJobs">;
+    snapshotImport?: string;
+    savedConfigurationId?: Id<"savedConfigurations">;
+  }>({});
+  const [sceneStatus, setSceneStatus] = useState("Waiting for your room");
 
   const [cameras, setCameras] = useState<MediaDeviceInfo[]>([]);
   const [deviceId, setDeviceId] = useState<string>("");
@@ -145,7 +163,46 @@ export default function Studio() {
   const evaluation =
     liveEvaluation?.revision === revision
       ? liveEvaluation
-      : evaluatePlacement(placement, source, revision);
+      : evaluateScene({
+          schemaVersion: 1,
+          sceneKey: sceneKey.current,
+          revision,
+          source,
+          room: roomSnapshot,
+          lucyObject: {
+            description: prompt,
+            placement,
+            coordinateSystem: "screen-percent",
+            dimensions: null,
+            observedInOutput: false,
+          },
+        });
+  function currentSceneKey() {
+    if (!sceneKey.current) sceneKey.current = crypto.randomUUID();
+    return sceneKey.current;
+  }
+  function resetScene() {
+    scanEpoch.current++;
+    sceneKey.current = crypto.randomUUID();
+    activeJobs.current.get("spatial")?.();
+    activeJobs.current.get("jev")?.();
+    setRoomSnapshot(null);
+    setSnapshotSelection({});
+    setLiveEvaluation(null);
+    setSceneStatus("New room view · attach a scan");
+  }
+  async function syncScene() {
+    if (!cloud.client || !cloud.ready)
+      throw new Error("Cloud session is still connecting.");
+    return cloud.client.mutation(api.scenes.sync, {
+      sceneKey: currentSceneKey(),
+      revision,
+      source,
+      prompt,
+      placement,
+      ...snapshotSelection,
+    });
+  }
   useEffect(() => {
     if (cloud.ready && cloud.client)
       void cloud.client
@@ -158,25 +215,51 @@ export default function Studio() {
         );
   }, [cloud.ready, cloud.client]);
   useEffect(() => {
-    if (!placed || !cloud.ready || !connections.jev) return;
+    if (!cloud.ready) return;
     const current = revision;
+    const view = currentSceneKey();
+    let valid = true;
     const timer = setTimeout(() => {
-      void runJob(
-        "jev",
-        { placement, source, prompt, previous: previousPlacement.current },
-        current,
-      )
+      setSceneStatus("Updating room understanding…");
+      void syncScene()
+        .then((state) => {
+          if (
+            !valid ||
+            latestRevision.current !== current ||
+            sceneKey.current !== view ||
+            !state
+          )
+            return null;
+          const scene = JSON.parse(state) as SceneState;
+          setRoomSnapshot(scene.room);
+          setSceneStatus(
+            connections.jev && placed
+              ? "Jev is reviewing this scene…"
+              : "Scene saved · Jev not running",
+          );
+          if (!placed || !connections.jev) return null;
+          return runJob("jev", { sceneKey: view }, current);
+        })
         .then((r) => {
-          if (latestRevision.current === current && r.evaluation) {
+          if (
+            valid &&
+            sceneKey.current === view &&
+            latestRevision.current === current &&
+            r?.evaluation
+          ) {
             setLiveEvaluation(r.evaluation as Evaluation);
-            previousPlacement.current = placement;
+            setSceneStatus(`Jev reviewed scene revision ${current}`);
           }
         })
         .catch((e) => {
-          if (latestRevision.current === current) toast.error(e.message);
+          if (valid && latestRevision.current === current) {
+            setSceneStatus("Review unavailable · showing local guidance");
+            toast.error(e.message);
+          }
         });
     }, 650);
     return () => {
+      valid = false;
       clearTimeout(timer);
       activeJobs.current.get("jev")?.();
     };
@@ -259,7 +342,7 @@ export default function Studio() {
           if (done) return;
           if (job?.status === "succeeded") {
             finish();
-            resolve(JSON.parse(job.result || "{}"));
+            resolve({ ...JSON.parse(job.result || "{}"), jobId: id });
           } else if (job?.status === "failed" || job?.status === "cancelled") {
             finish();
             reject(new Error(job.error || "Request cancelled."));
@@ -337,6 +420,8 @@ export default function Studio() {
       return;
     }
     setJobMessage("Understanding your room scan…");
+    const view = currentSceneKey();
+    const scan = ++scanEpoch.current;
     try {
       const bytes = new Uint8Array(await file.arrayBuffer());
       let raw = "";
@@ -344,19 +429,55 @@ export default function Studio() {
       const pointCloudId = await cloud.client.action(api.files.upload, {
         data: `data:application/octet-stream;base64,${btoa(raw)}`,
       });
+      if (sceneKey.current !== view || scanEpoch.current !== scan) return;
       const result = await runJob("spatial", {
         pointCloudId,
+        sceneKey: view,
         categories: ["chair", "sofa", "table", "window", "door"],
       });
+      if (sceneKey.current !== view || scanEpoch.current !== scan) return;
+      if (result.geometry) {
+        setRoomSnapshot(
+          parseSnapshot(JSON.stringify(result), "modal", Date.now()),
+        );
+        setSnapshotSelection({
+          snapshotJobId: result.jobId as Id<"providerJobs">,
+        });
+        setRevision((n) => n + 1);
+      }
       toast.success(
         result.geometry
-          ? "Scan processed. Geometry still needs camera alignment before clearance checks."
+          ? "Room understanding attached. Jev will review it with your current idea."
           : String(result.message || "Scan processed; alignment required."),
       );
     } catch (e) {
-      toast.error((e as Error).message);
+      if (sceneKey.current === view && scanEpoch.current === scan)
+        toast.error((e as Error).message);
     } finally {
-      setJobMessage("");
+      if (scanEpoch.current === scan) setJobMessage("");
+    }
+  }
+  async function importSnapshot(file: File | undefined) {
+    if (!file) return;
+    const view = currentSceneKey();
+    const scan = ++scanEpoch.current;
+    activeJobs.current.get("spatial")?.();
+    setJobMessage("");
+    try {
+      if (file.size > 120000)
+        throw new Error("Choose a SpatialLM JSON snapshot under 120 KB.");
+      const text = await file.text();
+      const parsed = parseSnapshot(text, "imported", Date.now());
+      if (sceneKey.current !== view || scanEpoch.current !== scan) return;
+      setRoomSnapshot(parsed);
+      setSnapshotSelection({ snapshotImport: JSON.stringify(parsed) });
+      setLiveEvaluation(null);
+      setRevision((n) => n + 1);
+      toast.success("Room snapshot attached to this view.");
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Invalid room snapshot.",
+      );
     }
   }
   async function startLive() {
@@ -371,7 +492,7 @@ export default function Studio() {
           if (!token) throw new Error("Lucy is not connected.");
           return token;
         },
-        `Add ${prompt} to the room. Preserve the rest of the scene.`,
+        lucyPrompt(prompt, initialPlacement),
         (s) => {
           if (editedVideo.current) {
             editedVideo.current.srcObject = s;
@@ -449,6 +570,7 @@ export default function Studio() {
         await video.current.play();
       }
       setSource("camera");
+      resetScene();
       setCameraState("Camera live");
       const devices = await navigator.mediaDevices.enumerateDevices();
       setCameras(devices.filter((d) => d.kind === "videoinput"));
@@ -472,6 +594,7 @@ export default function Studio() {
   }, []);
   function demo() {
     stopCamera();
+    resetScene();
     setRoomImage("/room-demo.png");
     setSource("demo");
     setRevision((n) => n + 1);
@@ -511,12 +634,14 @@ export default function Studio() {
     activeJobs.current.get("h3")?.();
     if (kind === "room") {
       stopCamera();
+      resetScene();
       setRoomImage(url);
       setSource("upload");
       setRevision((n) => n + 1);
     } else {
       setReference(url);
       setPlaced(false);
+      setRevision((n) => n + 1);
       toast.success("Reference ready. Place it in your room.");
     }
   }
@@ -551,8 +676,11 @@ export default function Studio() {
         i.onerror = () => reject(new Error("An image could not be loaded."));
         i.src = src;
       });
-    const bg =
-      source === "camera" && video.current?.videoWidth
+    const useLucyOutput =
+      includeItem && lucyActive && !!editedVideo.current?.videoWidth;
+    const bg = useLucyOutput
+      ? editedVideo.current!
+      : source === "camera" && video.current?.videoWidth
         ? video.current
         : await load(roomImage);
     const w = bg instanceof HTMLVideoElement ? bg.videoWidth : bg.width,
@@ -565,7 +693,7 @@ export default function Studio() {
       w * ratio,
       h * ratio,
     );
-    if (includeItem && placed) {
+    if (includeItem && placed && !useLucyOutput) {
       const item = await load(reference);
       const iw = 330 * transform.scale,
         ih = (iw * item.height) / item.width;
@@ -588,11 +716,15 @@ export default function Studio() {
         throw new Error(
           "Your cloud session is still connecting. Please try again.",
         );
+      const view = currentSceneKey();
+      await syncScene();
       const [referenceId, roomImageId, screenshotId] = await Promise.all([
         uploadImage(cloud.client, reference),
         uploadImage(cloud.client, bg),
         uploadImage(cloud.client, screenshot),
       ]);
+      if (latestRevision.current !== revision || sceneKey.current !== view)
+        throw new Error("Room changed while saving. Please save again.");
       return cloud.client.mutation(api.rooms.save, {
         requestId: crypto.randomUUID(),
         name,
@@ -604,6 +736,7 @@ export default function Studio() {
         referenceId,
         roomImageId,
         screenshotId,
+        sceneKey: view,
       });
     }
     const entry: SavedRoom = {
@@ -749,7 +882,7 @@ export default function Studio() {
     const timer = setTimeout(
       () =>
         lucy.current?.update(
-          `Add ${prompt}. Place its center at ${Math.round(placement.x)} percent from the left and ${Math.round(placement.y)} percent from the top. Scale ${placement.scale}, rotation ${placement.rotation} degrees. Keep the rest of the room unchanged.`,
+          lucyPrompt(prompt, placement),
           reference.startsWith("data:") ? reference : undefined,
         ),
       500,
@@ -769,6 +902,13 @@ export default function Studio() {
   }
   function reopen(room: SavedRoom) {
     stopCamera();
+    resetScene();
+    if (room.sceneState) {
+      setRoomSnapshot((JSON.parse(room.sceneState) as SceneState).room);
+      setSnapshotSelection({
+        savedConfigurationId: room.id as Id<"savedConfigurations">,
+      });
+    }
     setSource(room.source);
     setRoomImage(room.roomImage);
     setReference(room.reference);
@@ -1192,11 +1332,35 @@ export default function Studio() {
                   <ArrowRight />
                 </Button>
                 <p className="microcopy">
-                  {reference === "/chair.png"
-                    ? "Preview uses an example chair. Add your own image to swap it."
-                    : "Your image becomes an editable reference in the room."}
+                  {lucyActive
+                    ? "Lucy is generating your live view. Placement is requested; its rendered position is unverified."
+                    : reference === "/chair.png"
+                      ? "Preview uses an example chair. Add your own image to swap it."
+                      : "Your image becomes an editable reference in the room."}
                 </p>
               </div>
+              <section
+                className="scene-understanding"
+                aria-label="Room understanding"
+              >
+                <div className="eyebrow">ROOM UNDERSTANDING</div>
+                <p>
+                  {roomSnapshot
+                    ? roomSummary(roomSnapshot)
+                    : "Give Jev a scan of the room around your idea."}
+                </p>
+                <small aria-live="polite">{sceneStatus}</small>
+                <Button
+                  variant="outline"
+                  className="full"
+                  onClick={() => setDialog("settings")}
+                >
+                  <Layers2 />{" "}
+                  {roomSnapshot
+                    ? "Manage room snapshot"
+                    : "Attach room understanding"}
+                </Button>
+              </section>
               {!placed ? (
                 <div className="empty-guidance">
                   <div className="eyebrow">A LITTLE INSPIRATION</div>
@@ -1232,7 +1396,9 @@ export default function Studio() {
                         ? "Nice fit"
                         : evaluation.verdict === "adjust"
                           ? "Try a tweak"
-                          : "Needs a scan"}
+                          : roomSnapshot
+                            ? "Needs alignment"
+                            : "Needs a scan"}
                     </span>
                   </div>
                   <h3>{evaluation.title}</h3>
@@ -1258,6 +1424,12 @@ export default function Studio() {
                   </div>
                   {evaluation.adjustment && (
                     <>
+                      <Button
+                        className="full"
+                        onClick={() => update(evaluation.adjustment!)}
+                      >
+                        <Check /> Apply suggested placement
+                      </Button>
                       <Button
                         variant="outline"
                         className="full"
@@ -1455,6 +1627,16 @@ export default function Studio() {
         </main>
       )}
       <input
+        ref={snapshotFile}
+        type="file"
+        accept=".json,application/json"
+        hidden
+        onChange={(e) => {
+          void importSnapshot(e.target.files?.[0]);
+          e.target.value = "";
+        }}
+      />
+      <input
         ref={scanFile}
         type="file"
         accept=".ply"
@@ -1622,6 +1804,35 @@ export default function Studio() {
           )}
           {dialog === "settings" && (
             <div className="dialog-stack connections">
+              <section className="scene-understanding" aria-live="polite">
+                <strong>Room understanding → Jev → Lucy</strong>
+                <p>
+                  {roomSnapshot
+                    ? roomSummary(roomSnapshot)
+                    : "Attach a scan of this room to give Jev spatial context."}
+                </p>
+                <small>
+                  {sceneStatus}.{" "}
+                  {roomSnapshot ? "Camera alignment and scale pending. " : ""}
+                  Lucy’s requested placement is shared; generated pixels are not
+                  yet verified.
+                </small>
+                {roomSnapshot && (
+                  <Button
+                    variant="ghost"
+                    onClick={() => {
+                      scanEpoch.current++;
+                      activeJobs.current.get("spatial")?.();
+                      setJobMessage("");
+                      setSnapshotSelection({});
+                      setRoomSnapshot(null);
+                      setRevision((n) => n + 1);
+                    }}
+                  >
+                    Detach room snapshot
+                  </Button>
+                )}
+              </section>
               {[
                 ["Cloud saves · Convex", cloud.ready],
                 ["Live room editing · Lucy 2.5", connections.lucy],
@@ -1657,6 +1868,16 @@ export default function Studio() {
                 Use a reconstructed point cloud. A still webcam image is not a
                 room scan. Scan geometry requires camera alignment before
                 clearance checks.
+              </small>
+              <Button
+                variant="outline"
+                onClick={() => snapshotFile.current?.click()}
+              >
+                <Upload /> Attach SpatialLM JSON snapshot
+              </Button>
+              <small>
+                Use a precomputed snapshot of the room currently shown. Changing
+                rooms detaches it. Saved rooms retain their snapshot.
               </small>
               <Button variant="outline" onClick={() => setDialog("privacy")}>
                 <ShieldCheck />

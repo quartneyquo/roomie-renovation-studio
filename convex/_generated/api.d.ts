@@ -17,6 +17,7 @@ import type * as http from "../http.js";
 import type * as jobs from "../jobs.js";
 import type * as providers from "../providers.js";
 import type * as rooms from "../rooms.js";
+import type * as scenes from "../scenes.js";
 
 import type {
   ApiFromModules,
@@ -34,6 +35,7 @@ declare const fullApi: ApiFromModules<{
   jobs: typeof jobs;
   providers: typeof providers;
   rooms: typeof rooms;
+  scenes: typeof scenes;
 }>;
 
 /**

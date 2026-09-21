@@ -66,6 +66,7 @@ export function evaluatePlacement(
   };
 }
 export type SavedRoom = {
+  sceneState?: string;
   id: string;
   name: string;
   createdAt: number;
