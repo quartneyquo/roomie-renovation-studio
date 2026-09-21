@@ -32,6 +32,19 @@ image = (
 api_image = modal.Image.debian_slim(python_version="3.11").pip_install("fastapi", "pydantic")
 secret = modal.Secret.from_name("roomie-spatial")
 
+
+@app.function(image=image, gpu="L4", timeout=120)
+def gpu_health():
+    """Private Modal-only probe used to verify the deployed CUDA runtime."""
+    import torch
+
+    return {
+        "cudaAvailable": torch.cuda.is_available(),
+        "device": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
+        "torch": str(torch.__version__),
+    }
+
+
 @app.function(image=image, gpu="L4", timeout=600, max_containers=1, scaledown_window=60, secrets=[secret])
 def infer(point_cloud_url: str, categories: list[str], request_id: str):
     import httpx
