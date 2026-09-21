@@ -108,7 +108,9 @@ describe("private room storage", () => {
   it("keeps room scans owner-scoped and deletes source video after analysis", async () => {
     const { t, alice, bob } = await setup();
     const videoId = await t.run((ctx) =>
-      ctx.storage.store(new Blob(["video"], { type: "video/webm" })),
+      ctx.storage.store(
+        new Blob(["video"], { type: "video/webm;codecs=vp9" }),
+      ),
     );
     const id = await alice.mutation(api.scans.registerVideo, {
       storageId: videoId,

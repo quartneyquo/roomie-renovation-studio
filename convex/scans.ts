@@ -24,14 +24,15 @@ export const registerVideo = ownerMutation({
     const metadata = await ctx.db.system.get(a.storageId);
     if (!metadata || metadata.size <= 0 || metadata.size > 60_000_000)
       throw new ConvexError("Choose a room video smaller than 60 MB.");
+    const contentType = metadata.contentType?.split(";", 1)[0].toLowerCase();
     if (
-      metadata.contentType &&
+      contentType &&
       ![
         "video/webm",
         "video/mp4",
         "video/quicktime",
         "video/x-matroska",
-      ].includes(metadata.contentType)
+      ].includes(contentType)
     )
       throw new ConvexError(
         "Room scans must be WebM, MP4, or QuickTime video.",
