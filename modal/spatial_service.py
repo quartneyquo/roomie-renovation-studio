@@ -7,6 +7,7 @@ directory. No private room input is stored in a Modal Volume.
 """
 import os
 import hmac
+import json
 import time
 import tempfile
 import subprocess
@@ -78,13 +79,17 @@ def _spatial_snapshot(point_cloud: Path, output: Path, request_id: str, started:
     subprocess.run(args, cwd="/opt/SpatialLM", check=True, timeout=480, capture_output=True)
     layout = Layout(output.read_text())
     def serializable(value):
-        if isinstance(value, np.ndarray): return value.tolist()
-        if isinstance(value, np.generic): return value.item()
+        if isinstance(value, np.ndarray): return serializable(value.tolist())
+        if isinstance(value, np.generic): return serializable(value.item())
+        if isinstance(value, float): return round(value, 4)
         if isinstance(value, dict): return {key:serializable(item) for key,item in value.items()}
         if isinstance(value, (list,tuple)): return [serializable(item) for item in value]
         return value
-    geometry = {name:[serializable(vars(entity)) for entity in getattr(layout,name)] for name in ["walls","doors","windows","bboxes"]}
-    return {"mode":"live", "schemaVersion":1, "requestId":request_id, "model":MODEL, "reconstructionModel":"SLAM3R", "geometry":geometry, "confidence":None, "cameraAligned":False, "metricScaleVerified":False, "visualEstimate":True, "elapsedSeconds":round(time.monotonic()-started,2)}
+    geometry = {name:[serializable(vars(entity)) for entity in getattr(layout,name)[:100]] for name in ["walls","doors","windows","bboxes"]}
+    snapshot = {"mode":"live", "schemaVersion":1, "requestId":request_id, "model":MODEL, "reconstructionModel":"SLAM3R", "geometry":geometry, "confidence":None, "cameraAligned":False, "metricScaleVerified":False, "visualEstimate":True, "elapsedSeconds":round(time.monotonic()-started,2)}
+    if len(json.dumps(snapshot)) > 100_000:
+        snapshot["geometry"] = {name:items[:20] for name,items in geometry.items()}
+    return snapshot
 
 
 @app.function(image=image, gpu="L4", timeout=120)

@@ -868,7 +868,9 @@ export default function Studio() {
         video: {
           width: { ideal: 1280 },
           height: { ideal: 720 },
-          ...(selectedDevice ? { deviceId: { exact: selectedDevice } } : {}),
+          ...(selectedDevice
+            ? { deviceId: { exact: selectedDevice } }
+            : { facingMode: { ideal: "environment" } }),
         },
         audio: false,
       });
