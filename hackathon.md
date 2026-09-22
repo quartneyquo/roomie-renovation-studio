@@ -12,7 +12,7 @@
 - **Auth:** Convex Auth
 - **AI models:** lucy-2.5, jev-latest, google/gemini-3.8-flash, minimax/h3-max-turbo/image-to-video, SpatialLM
 - **Started:** 2026-09-21T07:52:12Z
-- **Last updated:** 2026-09-22T06:17:49Z
+- **Last updated:** 2026-09-22T06:53:23Z
 
 ## Log
 
@@ -39,3 +39,6 @@ Replaced furniture text entry with an eight-second microphone flow. Audio is enc
 
 ### 2026-09-22 - 870beef
 Shortened the guided room walkthrough from 30–60 seconds to 10–15 seconds and reduced reconstruction sampling to match. The frontend, provider timeout messaging, Modal worker, automated tests, typecheck, and production build were updated and verified (`components/studio.tsx`, `convex/providers.ts`, `modal/spatial_service.py`).
+
+### 2026-09-22 - 8590acb
+Hardened short room scans with denser frame sampling, PLY validation, bounded SpatialLM output, preserved inference diagnostics, and a conservative reconstructed-room fallback. Deployed the Modal backend and verified the real SpatialLM model against its official test point cloud (`modal/spatial_service.py`, `modal/README.md`).
