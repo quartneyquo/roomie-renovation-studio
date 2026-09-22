@@ -117,6 +117,10 @@ export default function Studio() {
     [clipLoading, setClipLoading] = useState(false),
     [clipError, setClipError] = useState<string | null>(null),
     [lucyActive, setLucyActive] = useState(false),
+    [lucyState, setLucyState] = useState<
+      "idle" | "connecting" | "active" | "failed"
+    >("idle"),
+    [lucyError, setLucyError] = useState(""),
     [emailSnapshot, setEmailSnapshot] = useState<{
       screenshot: string;
       roomImage: string;
@@ -127,6 +131,8 @@ export default function Studio() {
   const activeJobs = useRef(new Map<string, () => void>()),
     latestRevision = useRef(0),
     lucy = useRef<LucySession | null>(null),
+    lucyAttempt = useRef(0),
+    lucyConnecting = useRef(false),
     editedVideo = useRef<HTMLVideoElement>(null),
     h3Video = useRef<HTMLVideoElement>(null),
     mounted = useRef(true);
@@ -325,6 +331,8 @@ export default function Studio() {
     mounted.current = true;
     return () => {
       mounted.current = false;
+      lucyAttempt.current++;
+      lucyConnecting.current = false;
       lucy.current?.close();
       stopScanCamera();
       for (const cancel of activeJobs.current.values()) cancel();
@@ -805,6 +813,7 @@ export default function Studio() {
     toast.success("Room scan and its snapshot were deleted.");
   }
   async function startLive() {
+    if (lucyConnecting.current || lucyActive) return;
     if (!stream.current) {
       toast.error("Your camera is still starting. Try again in a moment.");
       return;
@@ -815,12 +824,17 @@ export default function Studio() {
       );
       return;
     }
+    const attempt = ++lucyAttempt.current;
+    lucyConnecting.current = true;
     setJobMessage("Connecting live room editing…");
     setLucyActive(false);
+    setLucyState("connecting");
+    setLucyError("");
     if (editedVideo.current) editedVideo.current.srcObject = null;
     try {
       lucy.current?.close();
-      lucy.current = await connectLucy(
+      lucy.current = null;
+      const session = await connectLucy(
         stream.current,
         async () => {
           const token = await cloud.client!.action(api.providers.lucyToken, {});
@@ -830,23 +844,52 @@ export default function Studio() {
         lucyPrompt(prompt, initialPlacement),
         reference.startsWith("data:") ? reference : undefined,
         (s) => {
+          if (lucyAttempt.current !== attempt || !mounted.current) return;
           if (editedVideo.current) {
             editedVideo.current.srcObject = s;
             void editedVideo.current.play();
           }
           setLucyActive(true);
+          setLucyState("active");
+          setLucyError("");
           setJobMessage("");
         },
         (error) => {
+          if (
+            lucyAttempt.current !== attempt ||
+            !mounted.current ||
+            /stale connect attempt/i.test(error)
+          )
+            return;
           toast.error(error);
           lucy.current?.close();
           setLucyActive(false);
+          setLucyState("failed");
+          setLucyError(error);
           setJobMessage("");
         },
       );
+      if (lucyAttempt.current !== attempt || !stream.current?.active) {
+        session.close();
+        return;
+      }
+      lucy.current = session;
     } catch (e) {
-      toast.error((e as Error).message);
+      const message =
+        e instanceof Error ? e.message : "Lucy could not connect.";
+      if (
+        lucyAttempt.current !== attempt ||
+        !mounted.current ||
+        /stale connect attempt/i.test(message)
+      )
+        return;
+      toast.error(message);
+      setLucyActive(false);
+      setLucyState("failed");
+      setLucyError(message);
       setJobMessage("");
+    } finally {
+      if (lucyAttempt.current === attempt) lucyConnecting.current = false;
     }
   }
 
@@ -879,8 +922,14 @@ export default function Studio() {
     }
   }, [tab]);
   function stopCamera() {
+    lucyAttempt.current++;
+    lucyConnecting.current = false;
     lucy.current?.close();
+    lucy.current = null;
     setLucyActive(false);
+    setLucyState("idle");
+    setLucyError("");
+    if (editedVideo.current) editedVideo.current.srcObject = null;
     stream.current?.getTracks().forEach((t) => t.stop());
     stream.current = null;
     setCameraState("Camera off");
@@ -928,7 +977,7 @@ export default function Studio() {
     } catch {
       toast.error("Saved rooms couldn’t be loaded.");
     }
-    void startCamera();
+    if (document.visibilityState === "visible") void startCamera();
     return () => stream.current?.getTracks().forEach((t) => t.stop());
   }, []);
   function demo() {
@@ -1462,7 +1511,17 @@ export default function Studio() {
               </div>
               <div
                 ref={stage}
-                className="room-stage"
+                className={`room-stage ${
+                  placed && !before && source === "camera"
+                    ? `live-verdict-frame ${
+                        jevRunState === "ready" && evaluation.fit === "green"
+                          ? "yes"
+                          : jevRunState === "ready"
+                            ? "no"
+                            : "checking"
+                      }`
+                    : ""
+                }`}
                 onPointerMove={(e) => {
                   if (!drag.current || !stage.current) return;
                   const b = stage.current.getBoundingClientRect();
@@ -1582,20 +1641,13 @@ export default function Studio() {
                 )}
                 {placed && !before && source === "camera" && (
                   <div
-                    className={`live-placement-outline ${
+                    className={`live-frame-verdict-badge ${
                       jevRunState === "ready" && evaluation.fit === "green"
                         ? "yes"
                         : jevRunState === "ready"
                           ? "no"
                           : "checking"
                     }`}
-                    style={{
-                      left: `${placement.x}%`,
-                      top: `${placement.y}%`,
-                      width: `${27.5 * placement.scale}%`,
-                      height: `${34 * placement.scale}%`,
-                      transform: `translate(-50%,-50%) rotate(${placement.rotation}deg)`,
-                    }}
                     aria-label={
                       jevRunState === "ready" && evaluation.fit === "green"
                         ? "Jev says yes to this placement"
@@ -1604,13 +1656,11 @@ export default function Studio() {
                           : "Jev is checking this placement"
                     }
                   >
-                    <span>
-                      {jevRunState === "ready"
-                        ? evaluation.fit === "green"
-                          ? "Jev: YES"
-                          : "Jev: NO"
-                        : "Jev: CHECKING"}
-                    </span>
+                    {jevRunState === "ready"
+                      ? evaluation.fit === "green"
+                        ? "Jev: YES"
+                        : "Jev: NO"
+                      : "Jev: CHECKING"}
                   </div>
                 )}
                 {!placed && (
@@ -1803,6 +1853,14 @@ export default function Studio() {
                         ? "Preview uses an example chair. Add your own image to swap it."
                         : "Your image becomes an editable reference in the room."}
                 </p>
+                {source === "camera" && placed && lucyState === "failed" && (
+                  <div className="lucy-retry" role="alert">
+                    <span>{lucyError || "Lucy could not connect."}</span>
+                    <Button variant="outline" size="sm" onClick={startLive}>
+                      Retry Lucy
+                    </Button>
+                  </div>
+                )}
               </div>
               <section
                 className="scene-understanding"
