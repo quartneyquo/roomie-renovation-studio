@@ -188,7 +188,37 @@ export function evaluateScene(scene: SceneState): Evaluation {
   };
 }
 export function lucyPrompt(description: string, placement: Placement): string {
-  return `Add ${description}. Place its center at ${Math.round(placement.x)} percent from the left and ${Math.round(placement.y)} percent from the top of the image. Relative visual scale ${placement.scale.toFixed(2)}; requested image-plane rotation ${Math.round(placement.rotation)} degrees. Keep the rest of the room unchanged. These are visual placement instructions, not verified physical coordinates.`;
+  return lucyLayoutPrompt(
+    [{ id: "active-item", prompt: description, placement }],
+    "active-item",
+  );
+}
+
+function visualPlacement(placement: Placement) {
+  const horizontal =
+    placement.x < 34
+      ? "on the left side"
+      : placement.x > 66
+        ? "on the right side"
+        : "near the center";
+  const depth =
+    placement.y < 40
+      ? "toward the back of the room"
+      : placement.y > 68
+        ? "in the foreground"
+        : "in the middle of the room";
+  const size =
+    placement.scale < 0.85
+      ? "compact"
+      : placement.scale > 1.2
+        ? "large"
+        : "medium-sized";
+  const rotation = Math.round(placement.rotation);
+  const orientation =
+    Math.abs(rotation) < 5
+      ? "facing forward"
+      : `angled slightly ${rotation > 0 ? "clockwise" : "counterclockwise"}`;
+  return `${size}, ${horizontal}, ${depth}, ${orientation}, standing naturally on the floor`;
 }
 
 export function lucyLayoutPrompt(
@@ -201,9 +231,8 @@ export function lucyLayoutPrompt(
     layout.find((item) => item.id === activeItemId) ?? layout.at(-1)!;
   const itemInstructions = layout
     .map((item, index) => {
-      const position = item.placement;
-      return `${index + 1}. ${item.prompt}${item.id === active.id ? " [ACTIVE ITEM]" : ""}: center ${Math.round(position.x)} percent from the left and ${Math.round(position.y)} percent from the top; relative visual scale ${position.scale.toFixed(2)}; image-plane rotation ${Math.round(position.rotation)} degrees.`;
+      return `${index + 1}) ${item.prompt}, ${visualPlacement(item.placement)}${item.id === active.id ? "; this is the active piece" : ""}`;
     })
-    .join("\n");
-  return `Render the complete furniture layout below in the live room. The active item is "${active.prompt}". Add or adjust only the active item as requested, while keeping every other listed furniture item visible in its stated position. Preserve the room architecture, camera view, lighting, and all original room details. Do not remove, replace, duplicate, or invent furniture.\n${itemInstructions}\nThese are visual placement instructions, not verified physical coordinates.`;
+    .join(". ");
+  return `Photorealistic interior-design preview. Keep the camera view, room structure, walls, floor, lighting, people, and existing objects unchanged. Add only these new furniture pieces: ${itemInstructions}. Keep all listed pieces visible. Refine only the active piece, ${active.prompt}. Keep straight lines straight and furniture realistically proportioned. Do not transform the whole room. Do not add text, labels, logos, duplicate furniture, warped surfaces, or extra objects.`;
 }

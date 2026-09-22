@@ -22,6 +22,7 @@ npm run build
 
 - Branded desktop studio; camera request on opening, photo fallback, example living room, camera selection and privacy controls.
 - Voice-first furniture descriptions with interchangeable uploaded references and labeled placeholders when Lucy cannot start.
+- Lucy receives short visual placement prompts instead of raw coordinates, waits for the generated stream to settle before Jev captures it, and labels the realtime result as a quick preview. H3 remains the polished suggestion output.
 - Pointer and keyboard placement, size, rotation, reset, remove, before/after, snapshot download and system share (download fallback).
 - Conservative image-space placement checks. The example sofa mask applies only to the example scene. Real rooms never inherit its geometry.
 - Private anonymous Convex sessions, bounded gallery, full configuration persistence, file ownership checks, image deletion, and 24-hour transient-data cleanup.

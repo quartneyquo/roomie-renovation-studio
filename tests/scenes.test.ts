@@ -143,7 +143,7 @@ describe("versioned room understanding", () => {
       }),
     ).rejects.toThrow("I couldn’t hear a furniture request");
   });
-  it("gives Lucy the complete layout and marks the active piece", () => {
+  it("gives Lucy a concise visual layout and marks the active piece", () => {
     const prompt = lucyLayoutPrompt(
       [
         {
@@ -160,13 +160,13 @@ describe("versioned room understanding", () => {
       "lamp",
     );
     expect(prompt).toContain("white bookshelf");
-    expect(prompt).toContain("floor lamp [ACTIVE ITEM]");
-    expect(prompt).toContain("center 78 percent from the left");
-    expect(prompt).toContain("rotation 15 degrees");
-    expect(prompt).toContain(
-      "keeping every other listed furniture item visible",
-    );
-    expect(prompt).toContain("Do not remove, replace, duplicate, or invent");
+    expect(prompt).toContain("floor lamp");
+    expect(prompt).toContain("this is the active piece");
+    expect(prompt).toContain("on the right side");
+    expect(prompt).toContain("angled slightly clockwise");
+    expect(prompt).toContain("Keep all listed pieces visible");
+    expect(prompt).toContain("Do not transform the whole room");
+    expect(prompt).toContain("Do not add text, labels, logos");
   });
   it("normalizes unverified imports and never approves physical fit", () => {
     const room = parseSnapshot(snapshot, "imported", 1);
@@ -327,7 +327,7 @@ describe("versioned room understanding", () => {
       placement: result.evaluation.adjustment,
     });
     expect(lucyPrompt(args.prompt, result.evaluation.adjustment)).toContain(
-      "38 percent from the left",
+      "near the center",
     );
     expect(result.evaluation.explanation).toContain("visual framing only");
   });

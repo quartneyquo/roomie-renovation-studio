@@ -165,6 +165,7 @@ export default function Studio() {
       "idle" | "connecting" | "active" | "placeholder" | "failed"
     >("idle"),
     [preferLucyPlaceholders, setPreferLucyPlaceholders] = useState(false),
+    [lucySettling, setLucySettling] = useState(false),
     [lucyError, setLucyError] = useState(""),
     [emailSnapshot, setEmailSnapshot] = useState<{
       screenshot: string;
@@ -178,6 +179,9 @@ export default function Studio() {
     lucy = useRef<LucySession | null>(null),
     lucyAttempt = useRef(0),
     lucyConnecting = useRef(false),
+    lucySettleTimer = useRef<ReturnType<typeof setTimeout> | null>(null),
+    lucyLastInstruction = useRef(""),
+    lucyLastReference = useRef(""),
     editedVideo = useRef<HTMLVideoElement>(null),
     h3Video = useRef<HTMLVideoElement>(null),
     mounted = useRef(true);
@@ -281,6 +285,14 @@ export default function Studio() {
     if (!sceneKey.current) sceneKey.current = crypto.randomUUID();
     return sceneKey.current;
   }
+  function beginLucySettling(duration = 3_500) {
+    if (lucySettleTimer.current) clearTimeout(lucySettleTimer.current);
+    setLucySettling(true);
+    lucySettleTimer.current = setTimeout(() => {
+      lucySettleTimer.current = null;
+      if (mounted.current) setLucySettling(false);
+    }, duration);
+  }
   function resetScene() {
     scanEpoch.current++;
     sceneKey.current = crypto.randomUUID();
@@ -330,6 +342,13 @@ export default function Studio() {
       const stateTimer = setTimeout(() => {
         setJevRunState("checking");
         setSceneStatus("Waiting for Lucy’s generated view…");
+      }, 0);
+      return () => clearTimeout(stateTimer);
+    }
+    if (source === "camera" && lucyActive && lucySettling) {
+      const stateTimer = setTimeout(() => {
+        setJevRunState("checking");
+        setSceneStatus("Hold steady while Lucy refines the preview…");
       }, 0);
       return () => clearTimeout(stateTimer);
     }
@@ -414,6 +433,7 @@ export default function Studio() {
     placed,
     source,
     lucyActive,
+    lucySettling,
     lucyVisualReady,
     cloud.ready,
     connections.jev,
@@ -438,6 +458,7 @@ export default function Studio() {
       lucyAttempt.current++;
       lucyConnecting.current = false;
       lucy.current?.close();
+      if (lucySettleTimer.current) clearTimeout(lucySettleTimer.current);
       stopScanCamera();
       if (voiceTimer.current) clearTimeout(voiceTimer.current);
       const capture = voiceCapture.current;
@@ -960,6 +981,14 @@ export default function Studio() {
     const instruction = lucyLayoutPrompt(layout, activeItem?.id ?? undefined);
     const activeReference = activeItem?.reference || "";
     if (lucyActive) {
+      if (
+        lucyLastInstruction.current === instruction &&
+        lucyLastReference.current === activeReference
+      )
+        return;
+      lucyLastInstruction.current = instruction;
+      lucyLastReference.current = activeReference;
+      beginLucySettling();
       lucy.current?.update(
         instruction,
         activeReference.startsWith("data:") ? activeReference : undefined,
@@ -970,10 +999,13 @@ export default function Studio() {
       lucy.current?.close();
       lucy.current = null;
       setLucyActive(false);
+      setLucySettling(false);
       setLucyState("placeholder");
       setPreferLucyPlaceholders(true);
       setLucyError(reason);
       setJobMessage("");
+      lucyLastInstruction.current = "";
+      lucyLastReference.current = "";
     };
     if ((preferLucyPlaceholders || !connections.lucy) && !forceProvider) {
       activatePlaceholder(
@@ -1008,6 +1040,8 @@ export default function Studio() {
     try {
       lucy.current?.close();
       lucy.current = null;
+      lucyLastInstruction.current = instruction;
+      lucyLastReference.current = activeReference;
       pendingSession = connectLucy(
         stream.current,
         async () => {
@@ -1029,6 +1063,7 @@ export default function Studio() {
             void editedVideo.current.play();
           }
           setLucyActive(true);
+          beginLucySettling(4_000);
           setLucyState("active");
           setPreferLucyPlaceholders(false);
           setLucyError("");
@@ -1175,9 +1210,16 @@ export default function Studio() {
     lucy.current?.close();
     lucy.current = null;
     setLucyActive(false);
+    setLucySettling(false);
+    if (lucySettleTimer.current) {
+      clearTimeout(lucySettleTimer.current);
+      lucySettleTimer.current = null;
+    }
     setLucyState("idle");
     setPreferLucyPlaceholders(false);
     setLucyError("");
+    lucyLastInstruction.current = "";
+    lucyLastReference.current = "";
     if (editedVideo.current) editedVideo.current.srcObject = null;
     stream.current?.getTracks().forEach((t) => t.stop());
     stream.current = null;
@@ -1770,16 +1812,21 @@ export default function Studio() {
     if (!lucyActive) return;
     const activeItem =
       items.find((item) => item.id === selectedItemId) ?? items.at(-1);
-    const timer = setTimeout(
-      () =>
-        lucy.current?.update(
-          lucyLayoutPrompt(items, activeItem?.id),
-          activeItem?.reference?.startsWith("data:")
-            ? activeItem.reference
-            : undefined,
-        ),
-      500,
-    );
+    const nextInstruction = lucyLayoutPrompt(items, activeItem?.id);
+    const nextReference = activeItem?.reference?.startsWith("data:")
+      ? activeItem.reference
+      : "";
+    if (
+      lucyLastInstruction.current === nextInstruction &&
+      lucyLastReference.current === nextReference
+    )
+      return;
+    const timer = setTimeout(() => {
+      lucyLastInstruction.current = nextInstruction;
+      lucyLastReference.current = nextReference;
+      beginLucySettling();
+      return lucy.current?.update(nextInstruction, nextReference || undefined);
+    }, 900);
     return () => clearTimeout(timer);
   }, [lucyActive, items, selectedItemId]);
   async function download() {
@@ -2059,7 +2106,11 @@ export default function Studio() {
                   <span className="glass-badge subtle">
                     {lucyPlaceholder
                       ? "Lucy fallback · placeholders"
-                      : "Visual planning"}
+                      : lucyActive
+                        ? lucySettling
+                          ? "Hold steady · refining"
+                          : "Lucy live · quick preview"
+                        : "Visual planning"}
                   </span>
                 </div>
                 {hasItems &&
@@ -2381,9 +2432,11 @@ export default function Studio() {
                   {voiceState === "transcribing"
                     ? "Your short voice clip is being sent to GMI for speech recognition."
                     : lucyActive
-                      ? jevRunState === "ready"
-                        ? "Jev checked the requested item in Lucy’s live output. Visual estimate only."
-                        : "Lucy is generating your live view. Jev is checking whether the requested item appears."
+                      ? lucySettling
+                        ? "Hold the camera steady while Lucy settles the furniture into the room."
+                        : jevRunState === "ready"
+                          ? "Jev checked the requested item in Lucy’s live output. Visual estimate only."
+                          : "Lucy is generating your live view. Jev is checking whether the requested item appears."
                       : lucyPlaceholder
                         ? "Fallback placeholders preserve your exact furniture descriptions and positions after Lucy could not start."
                         : source === "camera"
