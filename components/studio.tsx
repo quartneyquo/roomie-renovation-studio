@@ -831,10 +831,13 @@ export default function Studio() {
     setLucyState("connecting");
     setLucyError("");
     if (editedVideo.current) editedVideo.current.srcObject = null;
+    let providerMessage = "";
+    let connectTimer: ReturnType<typeof setTimeout> | undefined;
+    let pendingSession: Promise<LucySession> | undefined;
     try {
       lucy.current?.close();
       lucy.current = null;
-      const session = await connectLucy(
+      pendingSession = connectLucy(
         stream.current,
         async () => {
           const token = await cloud.client!.action(api.providers.lucyToken, {});
@@ -861,14 +864,26 @@ export default function Studio() {
             /stale connect attempt/i.test(error)
           )
             return;
-          toast.error(error);
-          lucy.current?.close();
-          setLucyActive(false);
-          setLucyState("failed");
+          providerMessage = error;
           setLucyError(error);
-          setJobMessage("");
+          setJobMessage("Lucy is retrying the realtime connection…");
         },
       );
+      const session = await Promise.race([
+        pendingSession,
+        new Promise<never>((_, reject) => {
+          connectTimer = setTimeout(
+            () =>
+              reject(
+                new Error(
+                  providerMessage ||
+                    "Lucy could not open a realtime session within 30 seconds.",
+                ),
+              ),
+            30_000,
+          );
+        }),
+      ]);
       if (lucyAttempt.current !== attempt || !stream.current?.active) {
         session.close();
         return;
@@ -884,11 +899,15 @@ export default function Studio() {
       )
         return;
       toast.error(message);
+      pendingSession?.then((session) => session.close()).catch(() => {});
+      if (lucyAttempt.current === attempt) lucyAttempt.current++;
+      lucyConnecting.current = false;
       setLucyActive(false);
       setLucyState("failed");
       setLucyError(message);
       setJobMessage("");
     } finally {
+      if (connectTimer) clearTimeout(connectTimer);
       if (lucyAttempt.current === attempt) lucyConnecting.current = false;
     }
   }
