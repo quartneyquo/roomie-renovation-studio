@@ -14,12 +14,14 @@ import {
   Layers2,
   Mail,
   Maximize2,
+  Mic,
   Move,
   Plus,
   RotateCcw,
   Settings2,
   ShieldCheck,
   Sparkles,
+  Square,
   Share2,
   Trash2,
   Upload,
@@ -65,7 +67,7 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { connectLucy, type LucySession } from "@/lib/lucy";
 import {
   evaluateScene,
-  lucyPrompt,
+  lucyLayoutPrompt,
   parseSnapshot,
   roomSummary,
   type SceneState,
@@ -78,6 +80,7 @@ type Connections = {
   research: boolean;
   spatial: boolean;
   email: boolean;
+  speech: boolean;
 };
 type ResearchSource = {
   url: string;
@@ -105,6 +108,7 @@ export default function Studio() {
     research: false,
     spatial: false,
     email: false,
+    speech: false,
   });
   const [liveEvaluation, setLiveEvaluation] = useState<Evaluation | null>(null),
     [sources, setSources] = useState<ResearchSource[]>([]),
@@ -146,6 +150,13 @@ export default function Studio() {
   const scanChunks = useRef<Blob[]>([]);
   const scanTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const scanStartedAt = useRef(0);
+  const voiceRecorder = useRef<MediaRecorder | null>(null);
+  const voiceChunks = useRef<Blob[]>([]);
+  const voiceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [voiceState, setVoiceState] = useState<
+    "idle" | "listening" | "transcribing" | "failed"
+  >("idle");
+  const [voiceError, setVoiceError] = useState("");
   const [scanStage, setScanStage] = useState<ScanStage>("guide");
   const [scanSeconds, setScanSeconds] = useState(0);
   const [scanError, setScanError] = useState("");
@@ -373,6 +384,12 @@ export default function Studio() {
       lucyConnecting.current = false;
       lucy.current?.close();
       stopScanCamera();
+      if (voiceTimer.current) clearTimeout(voiceTimer.current);
+      if (voiceRecorder.current?.state === "recording")
+        voiceRecorder.current.stop();
+      voiceRecorder.current?.stream
+        .getTracks()
+        .forEach((track) => track.stop());
       for (const cancel of activeJobs.current.values()) cancel();
     };
   }, []);
@@ -861,8 +878,37 @@ export default function Studio() {
     setDialog(null);
     toast.success("Room scan and its snapshot were deleted.");
   }
-  async function startLive() {
-    if (lucyConnecting.current || lucyActive) return;
+  async function startLive(
+    requestedItems: FurnitureItem[] = items,
+    requestedActiveItemId: string | null = selectedItemId,
+  ) {
+    const layout = requestedItems.length
+      ? requestedItems
+      : prompt.trim()
+        ? [
+            {
+              id: requestedActiveItemId || "active-item",
+              prompt: prompt.trim(),
+              placement,
+              ...(reference ? { reference } : {}),
+            },
+          ]
+        : [];
+    const activeItem =
+      layout.find((item) => item.id === requestedActiveItemId) ?? layout.at(-1);
+    const instruction = lucyLayoutPrompt(
+      layout,
+      activeItem?.id ?? undefined,
+    );
+    const activeReference = activeItem?.reference || "";
+    if (lucyActive) {
+      lucy.current?.update(
+        instruction,
+        activeReference.startsWith("data:") ? activeReference : undefined,
+      );
+      return;
+    }
+    if (lucyConnecting.current) return;
     if (!stream.current) {
       toast.error("Your camera is still starting. Try again in a moment.");
       return;
@@ -894,8 +940,8 @@ export default function Studio() {
           if (!token) throw new Error("Lucy is not connected.");
           return token;
         },
-        lucyPrompt(prompt, initialPlacement),
-        reference.startsWith("data:") ? reference : undefined,
+        instruction,
+        activeReference.startsWith("data:") ? activeReference : undefined,
         (s) => {
           if (lucyAttempt.current !== attempt || !mounted.current) return;
           receivedLucyStream = true;
@@ -1175,8 +1221,104 @@ export default function Studio() {
       );
     }
   }
-  async function place() {
-    if (!prompt.trim()) {
+
+  async function recordFurnitureRequest() {
+    if (voiceState === "listening") {
+      if (voiceTimer.current) clearTimeout(voiceTimer.current);
+      voiceTimer.current = null;
+      voiceRecorder.current?.stop();
+      return;
+    }
+    if (voiceState === "transcribing") return;
+    if (!cloud.ready || !cloud.client) {
+      toast.error("Your private cloud session is still connecting.");
+      return;
+    }
+    if (!connections.speech) {
+      toast.error("GMI speech recognition is not connected.");
+      return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
+      toast.error("Voice input is not available in this browser.");
+      return;
+    }
+    setVoiceError("");
+    try {
+      const audioStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+        video: false,
+      });
+      const mimeType = [
+        "audio/webm;codecs=opus",
+        "audio/mp4",
+        "audio/webm",
+      ].find((type) => MediaRecorder.isTypeSupported(type));
+      const recorder = new MediaRecorder(
+        audioStream,
+        mimeType ? { mimeType } : undefined,
+      );
+      voiceRecorder.current = recorder;
+      voiceChunks.current = [];
+      recorder.ondataavailable = (event) => {
+        if (event.data.size) voiceChunks.current.push(event.data);
+      };
+      recorder.onstop = async () => {
+        if (voiceTimer.current) clearTimeout(voiceTimer.current);
+        voiceTimer.current = null;
+        audioStream.getTracks().forEach((track) => track.stop());
+        const blob = new Blob(voiceChunks.current, {
+          type: recorder.mimeType || "audio/webm",
+        });
+        voiceChunks.current = [];
+        if (!blob.size) {
+          setVoiceState("failed");
+          setVoiceError("I couldn’t hear anything. Tap and try again.");
+          return;
+        }
+        setVoiceState("transcribing");
+        try {
+          const audio = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(String(reader.result));
+            reader.onerror = () =>
+              reject(new Error("Audio could not be read."));
+            reader.readAsDataURL(blob);
+          });
+          const result = await cloud.client!.action(api.providers.transcribe, {
+            audio,
+            mimeType: blob.type || "audio/webm",
+          });
+          setVoiceState("idle");
+          setPrompt(result.text);
+          await place(result.text);
+        } catch (error) {
+          const message =
+            error instanceof Error
+              ? error.message
+              : "Voice recognition failed. Try again.";
+          setVoiceState("failed");
+          setVoiceError(message);
+          toast.error(message);
+        }
+      };
+      recorder.start();
+      setVoiceState("listening");
+      voiceTimer.current = setTimeout(() => {
+        if (recorder.state === "recording") recorder.stop();
+      }, 8_000);
+    } catch {
+      setVoiceState("failed");
+      setVoiceError("Microphone access is needed to describe furniture.");
+    }
+  }
+
+  async function place(requestedPrompt = prompt) {
+    const description = requestedPrompt.trim();
+    if (!description) {
       toast.error("Describe the item you’d like to try.");
       return;
     }
@@ -1190,24 +1332,25 @@ export default function Studio() {
     setPlacement(nextPlacement);
     const item: FurnitureItem = {
       id: isNew ? crypto.randomUUID() : selectedItemId!,
-      prompt: prompt.trim(),
+      prompt: description,
       ...(reference ? { reference } : {}),
       placement: nextPlacement,
     };
-    setItems((current) => {
-      const exists = current.some((existing) => existing.id === item.id);
-      return exists
-        ? current.map((existing) => (existing.id === item.id ? item : existing))
-        : [...current, item];
-    });
+    const exists = items.some((existing) => existing.id === item.id);
+    const nextItems = exists
+      ? items.map((existing) => (existing.id === item.id ? item : existing))
+      : [...items, item];
+    setItems(nextItems);
     setSelectedItemId(item.id);
+    setPrompt(description);
     setAddingItem(false);
     setLiveEvaluation(null);
     setRevision((n) => n + 1);
     setPlaced(true);
     setBefore(false);
     setBusy(false);
-    if (source === "camera" && connections.lucy) void startLive();
+    if (source === "camera" && connections.lucy)
+      void startLive(nextItems, item.id);
     toast.success(
       source === "camera"
         ? connections.lucy
@@ -1215,7 +1358,7 @@ export default function Studio() {
           : "Lucy is not connected. Check the Decart credential."
         : reference
           ? "Your exact reference is ready to position."
-          : `“${prompt.trim()}” is ready for Lucy to generate.`,
+          : `“${description}” is ready for Lucy to generate.`,
     );
   }
   async function capture(
@@ -1524,16 +1667,20 @@ export default function Studio() {
   }, [source]);
   useEffect(() => {
     if (!lucyActive) return;
+    const activeItem =
+      items.find((item) => item.id === selectedItemId) ?? items.at(-1);
     const timer = setTimeout(
       () =>
         lucy.current?.update(
-          lucyPrompt(prompt, placement),
-          reference.startsWith("data:") ? reference : undefined,
+          lucyLayoutPrompt(items, activeItem?.id),
+          activeItem?.reference?.startsWith("data:")
+            ? activeItem.reference
+            : undefined,
         ),
       500,
     );
     return () => clearTimeout(timer);
-  }, [lucyActive, prompt, placement, reference]);
+  }, [lucyActive, items, selectedItemId]);
   async function download() {
     try {
       const a = document.createElement("a");
@@ -2062,33 +2209,53 @@ export default function Studio() {
                 </div>
               </div>
               <div className="prompt-block">
-                <label htmlFor="idea">
+                <label htmlFor="furniture-voice">
                   {addingItem
                     ? "What would you like to add?"
                     : selectedItem
                       ? "Selected piece"
                       : "What are you imagining?"}
                 </label>
-                <Textarea
-                  id="idea"
-                  value={prompt}
-                  onChange={(e) => {
-                    const nextPrompt = e.target.value;
-                    setPrompt(nextPrompt);
-                    if (selectedItemId && !addingItem)
-                      setItems((current) =>
-                        current.map((item) =>
-                          item.id === selectedItemId
-                            ? { ...item, prompt: nextPrompt }
-                            : item,
-                        ),
-                      );
-                    setRevision((n) => n + 1);
-                    setSuggestion(false);
-                  }}
-                  maxLength={1000}
-                  placeholder="A cozy chair, a bold new sofa…"
-                />
+                <button
+                  id="furniture-voice"
+                  className={`voice-request ${voiceState}`}
+                  aria-pressed={voiceState === "listening"}
+                  disabled={busy || voiceState === "transcribing"}
+                  onClick={() => void recordFurnitureRequest()}
+                >
+                  <span className="voice-request-icon">
+                    {voiceState === "listening" ? <Square /> : <Mic />}
+                  </span>
+                  <span>
+                    <strong>
+                      {voiceState === "listening"
+                        ? "Listening… tap when you’re done"
+                        : voiceState === "transcribing"
+                          ? "GMI is transcribing…"
+                          : voiceState === "failed"
+                            ? "Tap to try again"
+                            : prompt
+                              ? "Say a different furniture piece"
+                              : "Tap and say the furniture you want"}
+                    </strong>
+                    <small>
+                      {voiceState === "listening"
+                        ? "For example: a tall white bookshelf"
+                        : "Roomie adds the transcript to Lucy automatically"}
+                    </small>
+                  </span>
+                </button>
+                {prompt && voiceState !== "listening" && (
+                  <div className="voice-transcript" aria-live="polite">
+                    <span>Heard</span>
+                    <p>{prompt}</p>
+                  </div>
+                )}
+                {voiceError && (
+                  <p className="voice-error" role="alert">
+                    {voiceError}
+                  </p>
+                )}
                 <button
                   className="reference-button"
                   onClick={() => refFile.current?.click()}
@@ -2101,38 +2268,29 @@ export default function Studio() {
                   </span>
                   <Plus size={15} />
                 </button>
-                <Button
-                  className="place-button"
-                  onClick={place}
-                  disabled={busy}
-                >
-                  <Sparkles />
-                  {busy
-                    ? "Finding its place…"
-                    : addingItem
-                      ? "Add to my room"
-                      : placed
-                        ? "Update this item"
-                        : "Place it in my room"}
-                  <ArrowRight />
-                </Button>
                 <p className="microcopy">
-                  {lucyActive
-                    ? jevRunState === "ready"
-                      ? "Jev checked the requested item in Lucy’s live output. Visual estimate only."
-                      : "Lucy is generating your live view. Jev is checking whether the requested item appears."
-                    : source === "camera"
-                      ? connections.lucy
-                        ? "Lucy uses your exact description. Add a reference only when you want a specific look."
-                        : "Connect Decart to generate furniture in the live camera view."
-                      : reference
-                        ? "Your uploaded image is the reference for this exact piece."
-                        : "Your description stays attached to this piece. Add a reference for a direct image preview."}
+                  {voiceState === "transcribing"
+                    ? "Your short voice clip is being sent to GMI for speech recognition."
+                    : lucyActive
+                      ? jevRunState === "ready"
+                        ? "Jev checked the requested item in Lucy’s live output. Visual estimate only."
+                        : "Lucy is generating your live view. Jev is checking whether the requested item appears."
+                      : source === "camera"
+                        ? connections.lucy
+                          ? "Lucy uses your exact description. Add a reference only when you want a specific look."
+                          : "Connect Decart to generate furniture in the live camera view."
+                        : reference
+                          ? "Your uploaded image is the reference for this exact piece."
+                          : "Your spoken description stays attached to this piece. Add a reference for a direct image preview."}
                 </p>
                 {source === "camera" && placed && lucyState === "failed" && (
                   <div className="lucy-retry" role="alert">
                     <span>{lucyError || "Lucy could not connect."}</span>
-                    <Button variant="outline" size="sm" onClick={startLive}>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => void startLive()}
+                    >
                       Retry Lucy
                     </Button>
                   </div>
@@ -2938,6 +3096,7 @@ export default function Studio() {
                 ["Placement decisions · Jev", connections.jev],
                 ["Suggestion clips · H3 Max Turbo", connections.h3],
                 ["Room understanding · Modal / SpatialLM", connections.spatial],
+                ["Voice input · GMI speech recognition", connections.speech],
                 ["Expert research · Firecrawl", connections.research],
                 ["Email handoff · AgentMail", connections.email],
               ].map(([name, ready]) => (

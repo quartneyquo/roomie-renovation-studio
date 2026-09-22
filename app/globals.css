@@ -475,6 +475,106 @@ a:focus-visible {
   box-shadow: none;
   border-color: #e2d7cd;
 }
+.voice-request {
+  display: flex;
+  width: 100%;
+  min-height: 92px;
+  align-items: center;
+  gap: 14px;
+  border: 1px solid #dfd1c7;
+  border-radius: 12px;
+  background: #fffaf6;
+  color: #6f293d;
+  padding: 16px;
+  text-align: left;
+  transition:
+    border-color 160ms ease,
+    background 160ms ease,
+    transform 160ms ease;
+}
+.voice-request:hover:not(:disabled) {
+  border-color: #a65a6e;
+  background: #fff7f3;
+  transform: translateY(-1px);
+}
+.voice-request:disabled {
+  cursor: wait;
+  opacity: 0.78;
+}
+.voice-request.listening {
+  border-color: #832f46;
+  background: #832f46;
+  color: white;
+}
+.voice-request-icon {
+  display: grid;
+  width: 50px;
+  height: 50px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 50%;
+  background: #f1d9d8;
+  color: #832f46;
+}
+.voice-request.listening .voice-request-icon {
+  background: #fff2;
+  color: white;
+  animation: voice-pulse 1.2s ease-in-out infinite;
+}
+.voice-request-icon svg {
+  width: 22px;
+  height: 22px;
+}
+.voice-request > span:last-child {
+  min-width: 0;
+}
+.voice-request strong,
+.voice-request small {
+  display: block;
+}
+.voice-request strong {
+  font-size: 13px;
+  line-height: 1.35;
+}
+.voice-request small {
+  margin-top: 5px;
+  color: #9a7f73;
+  font-size: 11px;
+  line-height: 1.4;
+}
+.voice-request.listening small {
+  color: #fffbd;
+}
+.voice-transcript {
+  margin-top: 10px;
+  border-left: 3px solid #b36b7d;
+  padding: 5px 0 5px 10px;
+}
+.voice-transcript span {
+  color: #a18a7e;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+.voice-transcript p {
+  margin-top: 2px;
+  color: #624b42;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.voice-error {
+  margin-top: 9px;
+  color: #a12f42;
+  font-size: 11px;
+  line-height: 1.45;
+}
+@keyframes voice-pulse {
+  50% {
+    box-shadow: 0 0 0 8px #fff2;
+    transform: scale(0.94);
+  }
+}
 .reference-button {
   display: flex;
   align-items: center;
@@ -1508,19 +1608,37 @@ a:focus-visible {
 }
 @media (max-width: 480px) {
   .topbar {
-    gap: 3px;
+    gap: 6px;
     padding: 0 8px;
+  }
+  .brand {
+    width: 38px;
+    flex: 0 0 38px;
   }
   .brand img {
     width: 36px;
     height: 40px;
   }
   .brand > span {
-    font-size: 23px;
+    display: none;
+  }
+  .topbar > [data-slot="tabs"] {
+    flex: 1 1 auto;
+    margin: 0;
+  }
+  .main-tabs {
+    width: 100%;
+    gap: 2px;
   }
   .main-tabs [data-slot="tabs-trigger"] {
-    font-size: 11px;
-    padding: 7px 6px;
+    min-width: 0;
+    flex: 1 1 0;
+    white-space: nowrap;
+  }
+  .header-right > button {
+    width: 36px;
+    height: 36px;
+    flex-basis: 36px;
   }
   .main-tabs svg {
     display: none;

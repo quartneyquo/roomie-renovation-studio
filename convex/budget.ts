@@ -14,10 +14,16 @@ export async function reserve(ctx: MutationCtx, kind: string, limit: number) {
   else await ctx.db.insert("usageBuckets", { key, count: 1 });
 }
 export const claim = internalMutation({
-  args: { kind: v.union(v.literal("upload"), v.literal("lucy")) },
+  args: {
+    kind: v.union(v.literal("upload"), v.literal("lucy"), v.literal("speech")),
+  },
   returns: v.null(),
   handler: async (ctx, { kind }) => {
-    await reserve(ctx, kind, kind === "upload" ? 200 : 20);
+    await reserve(
+      ctx,
+      kind,
+      kind === "upload" ? 200 : kind === "speech" ? 60 : 20,
+    );
     return null;
   },
 });

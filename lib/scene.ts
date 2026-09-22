@@ -182,3 +182,20 @@ export function evaluateScene(scene: SceneState): Evaluation {
 export function lucyPrompt(description: string, placement: Placement): string {
   return `Add ${description}. Place its center at ${Math.round(placement.x)} percent from the left and ${Math.round(placement.y)} percent from the top of the image. Relative visual scale ${placement.scale.toFixed(2)}; requested image-plane rotation ${Math.round(placement.rotation)} degrees. Keep the rest of the room unchanged. These are visual placement instructions, not verified physical coordinates.`;
 }
+
+export function lucyLayoutPrompt(
+  layout: NonNullable<SceneState["layout"]>,
+  activeItemId?: string,
+): string {
+  if (!layout.length)
+    return "Preserve the original room exactly. Do not add any furniture.";
+  const active =
+    layout.find((item) => item.id === activeItemId) ?? layout.at(-1)!;
+  const itemInstructions = layout
+    .map((item, index) => {
+      const position = item.placement;
+      return `${index + 1}. ${item.prompt}${item.id === active.id ? " [ACTIVE ITEM]" : ""}: center ${Math.round(position.x)} percent from the left and ${Math.round(position.y)} percent from the top; relative visual scale ${position.scale.toFixed(2)}; image-plane rotation ${Math.round(position.rotation)} degrees.`;
+    })
+    .join("\n");
+  return `Render the complete furniture layout below in the live room. The active item is "${active.prompt}". Add or adjust only the active item as requested, while keeping every other listed furniture item visible in its stated position. Preserve the room architecture, camera view, lighting, and all original room details. Do not remove, replace, duplicate, or invent furniture.\n${itemInstructions}\nThese are visual placement instructions, not verified physical coordinates.`;
+}

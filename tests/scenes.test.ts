@@ -5,6 +5,7 @@ import { api, internal } from "../convex/_generated/api";
 import { initialPlacement } from "../lib/room";
 import {
   evaluateScene,
+  lucyLayoutPrompt,
   lucyPrompt,
   normalizeWalls,
   parseSnapshot,
@@ -48,6 +49,97 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 describe("versioned room understanding", () => {
+  it("transcribes a short furniture request through GMI", async () => {
+    const { alice } = await setup();
+    vi.stubEnv("GMI_API_KEY", "test-gmi-key");
+    let submitted: Record<string, unknown> | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url, options) => {
+        expect(String(url)).toBe(
+          "https://api.gmi-serving.com/v1/chat/completions",
+        );
+        expect(options.headers.Authorization).toBe("Bearer test-gmi-key");
+        expect(options.headers["Content-Type"]).toBe("application/json");
+        submitted = JSON.parse(String(options.body));
+        return new Response(
+          JSON.stringify({
+            choices: [
+              { message: { content: "a tall white bookshelf." } },
+            ],
+          }),
+          {
+            status: 200,
+          },
+        );
+      }),
+    );
+    await expect(
+      alice.action(api.providers.transcribe, {
+        audio: "data:audio/webm;base64,dGVzdA==",
+        mimeType: "audio/webm",
+      }),
+    ).resolves.toEqual({
+      text: "a tall white bookshelf",
+      model: "google/gemini-3.8-flash",
+    });
+    expect(submitted?.model).toBe("google/gemini-3.8-flash");
+    expect(submitted?.max_tokens).toBe(512);
+    const content = (
+      submitted?.messages as Array<{
+        content: Array<{
+          type: string;
+          input_audio?: { data: string; format: string };
+        }>;
+      }>
+    )[0].content;
+    expect(content[1]).toEqual({
+      type: "input_audio",
+      input_audio: { data: "dGVzdA==", format: "webm" },
+    });
+  });
+  it("rejects an empty speech result before an item can be added", async () => {
+    const { alice } = await setup();
+    vi.stubEnv("GMI_API_KEY", "test-gmi-key");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify({ choices: [{ message: { content: "EMPTY" } }] }),
+          { status: 200 },
+        ),
+      ),
+    );
+    await expect(
+      alice.action(api.providers.transcribe, {
+        audio: "data:audio/webm;base64,dGVzdA==",
+        mimeType: "audio/webm",
+      }),
+    ).rejects.toThrow("I couldn’t hear a furniture request");
+  });
+  it("gives Lucy the complete layout and marks the active piece", () => {
+    const prompt = lucyLayoutPrompt(
+      [
+        {
+          id: "bookshelf",
+          prompt: "white bookshelf",
+          placement: { ...initialPlacement, x: 24, scale: 0.8 },
+        },
+        {
+          id: "lamp",
+          prompt: "floor lamp",
+          placement: { ...initialPlacement, x: 78, rotation: 15 },
+        },
+      ],
+      "lamp",
+    );
+    expect(prompt).toContain("white bookshelf");
+    expect(prompt).toContain("floor lamp [ACTIVE ITEM]");
+    expect(prompt).toContain("center 78 percent from the left");
+    expect(prompt).toContain("rotation 15 degrees");
+    expect(prompt).toContain("keeping every other listed furniture item visible");
+    expect(prompt).toContain("Do not remove, replace, duplicate, or invent");
+  });
   it("normalizes unverified imports and never approves physical fit", () => {
     const room = parseSnapshot(snapshot, "imported", 1);
     expect(room.cameraAligned).toBe(false);

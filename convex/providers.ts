@@ -150,6 +150,7 @@ export const status = action({
     research: v.boolean(),
     spatial: v.boolean(),
     email: v.boolean(),
+    speech: v.boolean(),
   }),
   handler: async (ctx) => {
     await user(ctx);
@@ -164,7 +165,104 @@ export const status = action({
       email: !!(
         process.env.AGENTMAIL_API_KEY && process.env.AGENTMAIL_INBOX_ID
       ),
+      speech: !!process.env.GMI_API_KEY,
     };
+  },
+});
+
+export const transcribe = action({
+  args: {
+    audio: v.string(),
+    mimeType: v.string(),
+  },
+  returns: v.object({ text: v.string(), model: v.string() }),
+  handler: async (ctx, { audio, mimeType }) => {
+    await user(ctx);
+    const key = process.env.GMI_API_KEY;
+    if (!key) throw new Error("GMI speech recognition is not connected.");
+    if (
+      audio.length > 4_000_000 ||
+      !/^data:audio\/(webm|mp4|mpeg|wav|ogg|x-m4a)(;[^,]*)?;base64,/.test(audio)
+    )
+      throw new Error("Record a furniture request shorter than 10 seconds.");
+
+    await ctx.runMutation(internal.budget.claim, { kind: "speech" });
+    const [, body] = audio.split(",", 2);
+    const binary = atob(body);
+    if (!binary.length || binary.length > 2_500_000)
+      throw new Error("Record a furniture request shorter than 10 seconds.");
+
+    const model = process.env.GMI_STT_MODEL || "google/gemini-3.8-flash";
+    const endpoint =
+      process.env.GMI_STT_URL ||
+      "https://api.gmi-serving.com/v1/chat/completions";
+    if (!endpoint.startsWith("https://"))
+      throw new Error("GMI speech recognition is not configured safely.");
+    const format = mimeType.includes("wav")
+      ? "wav"
+      : mimeType.includes("mp4")
+        ? "mp4"
+        : mimeType.includes("mpeg")
+          ? "mp3"
+          : mimeType.includes("ogg")
+            ? "ogg"
+            : "webm";
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${key}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        temperature: 0,
+        max_tokens: 512,
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: "Transcribe the audible speech verbatim. The speaker should name one furniture item. Return only the exact words that were clearly spoken, with no quotation marks, commentary, correction, description, or added details. Never infer or invent a furniture item from background sound or unclear audio. If clear speech is not audible, return exactly EMPTY.",
+              },
+              {
+                type: "input_audio",
+                input_audio: { data: body, format },
+              },
+            ],
+          },
+        ],
+      }),
+      signal: AbortSignal.timeout(60_000),
+    });
+    if (!response.ok) {
+      const detail = (await response.text()).replace(/\s+/g, " ").slice(0, 400);
+      throw new Error(
+        `GMI speech recognition returned ${response.status}. ${detail || "Check the speech model configuration."}`,
+      );
+    }
+    const payload = (await response.json()) as {
+      choices?: Array<{
+        message?: {
+          content?: string | Array<{ type?: string; text?: string }>;
+        };
+      }>;
+    };
+    const content = payload.choices?.[0]?.message?.content;
+    const transcription = Array.isArray(content)
+      ? content.map((part) => part.text || "").join(" ")
+      : content || "";
+    const text = transcription
+      .trim()
+      .replace(/^['"]|['"]$/g, "")
+      .replace(/[.!?]+$/g, "")
+      .trim();
+    if (
+      !text ||
+      /^(a|an|the|empty|no speech|inaudible|unclear)$/i.test(text)
+    )
+      throw new Error("I couldn’t hear a furniture request. Try again.");
+    return { text: text.slice(0, 1000), model };
   },
 });
 export const ownedUrl = internalQuery({
