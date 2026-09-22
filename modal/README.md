@@ -11,7 +11,7 @@ an end-to-end browser smoke test.
 2. Create the Modal secret `roomie-spatial` with `SPATIAL_API_TOKEN` (a random secret) and `ALLOWED_INPUT_HOSTS=fleet-cheetah-120.convex.cloud`. Use the actual hostname returned by Convex storage if it differs. Do not use a wildcard.
 3. `modal deploy modal/spatial_service.py`. The initial CUDA image/model build takes time; subsequent deploys reuse the image layers.
 4. Set Convex `MODAL_SPATIAL_URL` to the returned API endpoint, and `MODAL_SPATIAL_TOKEN` to the same secret.
-5. Use **Scan this room** to upload a 30–60 second WebM/MP4 walkthrough (under 60 MB), or upload a PLY point cloud (under 3 MB) from Studio connections. Convex records the job, starts inference, and polls the reconstruction and analysis phases. Modal scales to zero; one GPU container limits concurrency.
+5. Use **Scan this room** to upload a 10–15 second WebM/MP4 walkthrough (under 60 MB), or upload a PLY point cloud (under 3 MB) from Studio connections. Convex records the job, starts inference, and polls the reconstruction and analysis phases. Modal scales to zero; one GPU container limits concurrency.
 
 For a private CUDA check, run `modal run modal/spatial_service.py::gpu_health`.
 

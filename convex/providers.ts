@@ -1011,7 +1011,7 @@ export const pollSpatial = internalAction({
       if (Date.now() - job.createdAt > (isVideo ? 1_200_000 : 600_000))
         throw new Error(
           isVideo
-            ? "Room reconstruction timed out. Try a slower 30-second walkthrough."
+            ? "Room reconstruction timed out. Try a slower 15-second walkthrough."
             : "Room scan timed out. Try a smaller point cloud.",
         );
       const output = z

@@ -30,7 +30,7 @@ npm run build
 - Research citations and source-backed recipient selection when Firecrawl is connected. No invented contact emails.
 - Exact screenshot/message/recipient preview and explicit send approval. Email is not sent in preview mode. Ambiguous delivery is not automatically retried.
 - WebMCP tools for reading and editing the same visible placement. No tool sends an email or exposes camera images.
-- Mobile-first **Scan this room** flow with camera permission, a guided 30–60 second walkthrough, direct Convex upload, live upload/reconstruction/analysis status, and retry, replacement, and deletion controls.
+- Mobile-first **Scan this room** flow with camera permission, a guided 10–15 second walkthrough, direct Convex upload, live upload/reconstruction/analysis status, and retry, replacement, and deletion controls.
 - Modal L4 pipeline that samples the walkthrough, reconstructs a `.ply` with SLAM3R, runs SpatialLM, deletes successful source video, and saves a compact owner-scoped room snapshot in Convex.
 - Jev traffic-light visual-fit guidance (`green`, `amber`, or `red`) with confidence and concise explanations. Every scan-derived result is labeled as a visual estimate.
 
@@ -60,7 +60,7 @@ See [Modal setup](modal/README.md) for the prepared CUDA service.
 
 ### Room understanding → Jev → Lucy
 
-The studio persists an owner-scoped, versioned scene in Convex. It combines a SpatialLM snapshot with the user's intended Lucy object description and screen-space placement. **Scan this room** records a 30–60 second walkthrough, uploads it to private Convex storage, reconstructs a `.ply` with SLAM3R on Modal, and runs SpatialLM. The successful video and temporary `.ply` are deleted while the compact snapshot remains linked to the room. Failed source videos expire within 24 hours and can be retried, replaced, or deleted. Advanced users can still attach a completed PLY or import a SpatialLM JSON snapshot in Settings.
+The studio persists an owner-scoped, versioned scene in Convex. It combines a SpatialLM snapshot with the user's intended Lucy object description and screen-space placement. **Scan this room** records a 10–15 second walkthrough, uploads it to private Convex storage, reconstructs a `.ply` with SLAM3R on Modal, and runs SpatialLM. The successful video and temporary `.ply` are deleted while the compact snapshot remains linked to the room. Failed source videos expire within 24 hours and can be retried, replaced, or deleted. Advanced users can still attach a completed PLY or import a SpatialLM JSON snapshot in Settings.
 
 Convex loads the scene server-side when evaluating with Jev. Jev receives the structured room, provenance, requested item, visual constraints, and supplied candidate adjustments, then returns green, amber, or red visual-fit guidance with confidence. Application code supplies the short explanation and explicit visual-estimate caveat. Apply suggested placement updates the same state used to construct Lucy prompts. Results are revision-bound on both client and server. Local guidance uses the same snapshot when Jev credentials are unavailable. Saved rooms embed the snapshot so it survives transient job cleanup; opening a different camera/photo clears it, and reopening a saved room restores its own snapshot.
 
@@ -76,6 +76,6 @@ Imported and current Modal snapshots do not establish camera alignment or metric
 
 ## Validation
 
-Fifteen automated tests cover private data access, foreign asset rejection, full-transform persistence, idempotent saves, deletion/retention, email claim ownership, duplicate email approvals, stale-job cancellation, scene revision ordering, snapshot ownership/view binding, persistence after cleanup, and room evidence reaching the Jev adapter. TypeScript, the production build, Convex deployment, and Modal CUDA/SLAM3R health checks pass. The automated Jev-to-Lucy test mocks the provider response. A full 30–60 second real-room browser scan remains the final manual validation; this does not claim physical fit or validate Lucy's generated placement.
+Fifteen automated tests cover private data access, foreign asset rejection, full-transform persistence, idempotent saves, deletion/retention, email claim ownership, duplicate email approvals, stale-job cancellation, scene revision ordering, snapshot ownership/view binding, persistence after cleanup, and room evidence reaching the Jev adapter. TypeScript, the production build, Convex deployment, and Modal CUDA/SLAM3R health checks pass. The automated Jev-to-Lucy test mocks the provider response. A full 10–15 second real-room browser scan remains the final manual validation; this does not claim physical fit or validate Lucy's generated placement.
 
 No training or fine-tuning is needed or performed.

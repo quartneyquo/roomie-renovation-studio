@@ -142,17 +142,17 @@ def reconstruct_and_infer(video_url: str, categories: list[str], request_id: str
             video, frames, results = root / "scan", root / "frames", root / "results"
             frames.mkdir()
             _download(video_url, video, 60_000_000)
-            # A steady 0.75 fps keeps a 30-60 second walkthrough within the L4's
-            # memory envelope while retaining enough parallax for reconstruction.
+            # One frame per second keeps a 10-15 second walkthrough small while
+            # retaining enough parallax for the demo reconstruction.
             subprocess.run(
-                ["ffmpeg", "-v", "error", "-i", str(video), "-vf", "fps=0.75,scale='min(720,iw)':-2", "-frames:v", "45", str(frames / "frame_%04d.jpg")],
+                ["ffmpeg", "-v", "error", "-i", str(video), "-vf", "fps=1,scale='min(720,iw)':-2", "-frames:v", "15", str(frames / "frame_%04d.jpg")],
                 check=True,
                 timeout=120,
                 capture_output=True,
             )
             frame_count = len(list(frames.glob("*.jpg")))
-            if frame_count < 12:
-                raise ValueError("Walkthrough needs at least 30 seconds of steady room coverage")
+            if frame_count < 8:
+                raise ValueError("Walkthrough needs at least 10 seconds of steady room coverage")
             command = [
                 "/opt/slam3r-env/bin/python", "/opt/SLAM3R/recon.py",
                 "--test_name", "roomie", "--img_dir", str(frames),

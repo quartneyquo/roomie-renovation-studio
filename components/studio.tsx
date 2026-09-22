@@ -99,6 +99,8 @@ type ScanStage =
   | "analyzing"
   | "ready"
   | "failed";
+const scanMinimumSeconds = 10;
+const scanMaximumSeconds = 15;
 
 function wavBlob(chunks: Float32Array[], sampleRate: number) {
   const sampleCount = chunks.reduce((total, chunk) => total + chunk.length, 0);
@@ -754,7 +756,10 @@ export default function Studio() {
       scanTimer.current = setInterval(() => {
         const seconds = Math.floor((Date.now() - scanStartedAt.current) / 1000);
         setScanSeconds(seconds);
-        if (seconds >= 60 && scanRecorder.current?.state === "recording")
+        if (
+          seconds >= scanMaximumSeconds &&
+          scanRecorder.current?.state === "recording"
+        )
           scanRecorder.current.stop();
       }, 250);
     } catch {
@@ -763,7 +768,11 @@ export default function Studio() {
     }
   }
   function finishRoomRecording() {
-    if (scanSeconds < 30 || scanRecorder.current?.state !== "recording") return;
+    if (
+      scanSeconds < scanMinimumSeconds ||
+      scanRecorder.current?.state !== "recording"
+    )
+      return;
     scanRecorder.current.stop();
   }
   async function runRoomScanJob(
@@ -2847,7 +2856,7 @@ export default function Studio() {
                 <div className="scan-guide">
                   <div className="scan-illustration">
                     <Camera size={34} />
-                    <span>30–60 sec</span>
+                    <span>10–15 sec</span>
                   </div>
                   <h3>Walk slowly around the whole living room.</h3>
                   <ul>
@@ -2884,7 +2893,7 @@ export default function Studio() {
                     <video ref={scanPreview} muted playsInline autoPlay />
                     {scanStage === "recording" && (
                       <span className="recording-badge">
-                        <i /> REC {Math.min(scanSeconds, 60)}s
+                        <i /> REC {Math.min(scanSeconds, scanMaximumSeconds)}s
                       </span>
                     )}
                   </div>
@@ -2892,7 +2901,7 @@ export default function Studio() {
                     <>
                       <p>
                         Start near a doorway, then pan and walk slowly around
-                        the room. Keep recording for at least 30 seconds.
+                        the room. Keep recording for at least 10 seconds.
                       </p>
                       <Button className="full" onClick={startRoomRecording}>
                         <Video /> Start walkthrough
@@ -2903,19 +2912,19 @@ export default function Studio() {
                       <div className="scan-timer-track">
                         <span
                           style={{
-                            width: `${Math.min(100, (scanSeconds / 60) * 100)}%`,
+                            width: `${Math.min(100, (scanSeconds / scanMaximumSeconds) * 100)}%`,
                           }}
                         />
                       </div>
                       <p>
-                        {scanSeconds < 30
-                          ? `${30 - scanSeconds} seconds until you can finish`
-                          : "Enough coverage captured. Continue toward 60 seconds for more detail."}
+                        {scanSeconds < scanMinimumSeconds
+                          ? `${scanMinimumSeconds - scanSeconds} seconds until you can finish`
+                          : "Enough coverage captured. Continue toward 15 seconds for more detail."}
                       </p>
                       <Button
                         className="full"
                         onClick={finishRoomRecording}
-                        disabled={scanSeconds < 30}
+                        disabled={scanSeconds < scanMinimumSeconds}
                       >
                         <Check /> Finish scan
                       </Button>
@@ -3172,7 +3181,7 @@ export default function Studio() {
                 <Camera /> Scan this room
               </Button>
               <small>
-                Record a 30–60 second walkthrough. The video is uploaded to
+                Record a 10–15 second walkthrough. The video is uploaded to
                 Convex and sent to Modal for reconstruction and SpatialLM
                 analysis.
               </small>
