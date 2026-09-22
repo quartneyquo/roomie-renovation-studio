@@ -164,7 +164,7 @@ export default function Studio() {
     [lucyState, setLucyState] = useState<
       "idle" | "connecting" | "active" | "placeholder" | "failed"
     >("idle"),
-    [preferLucyPlaceholders, setPreferLucyPlaceholders] = useState(true),
+    [preferLucyPlaceholders, setPreferLucyPlaceholders] = useState(false),
     [lucyError, setLucyError] = useState(""),
     [emailSnapshot, setEmailSnapshot] = useState<{
       screenshot: string;
@@ -978,8 +978,8 @@ export default function Studio() {
     if ((preferLucyPlaceholders || !connections.lucy) && !forceProvider) {
       activatePlaceholder(
         connections.lucy
-          ? "Lucy demo mode is on. No Decart credits are being used."
-          : "Lucy is not connected, so Roomie is showing demo placeholders.",
+          ? "Lucy placeholder fallback remains active until you retry."
+          : "Lucy is not connected, so Roomie is showing fallback placeholders.",
       );
       return;
     }
@@ -1176,6 +1176,7 @@ export default function Studio() {
     lucy.current = null;
     setLucyActive(false);
     setLucyState("idle");
+    setPreferLucyPlaceholders(false);
     setLucyError("");
     if (editedVideo.current) editedVideo.current.srcObject = null;
     stream.current?.getTracks().forEach((t) => t.stop());
@@ -1438,7 +1439,7 @@ export default function Studio() {
     toast.success(
       source === "camera"
         ? preferLucyPlaceholders || !connections.lucy
-          ? "Lucy demo placeholders are ready in your live camera."
+          ? "Lucy fallback placeholders are ready in your live camera."
           : "Connecting your camera directly to Decart Lucy."
         : reference
           ? "Your exact reference is ready to position."
@@ -2057,7 +2058,7 @@ export default function Studio() {
                   </span>
                   <span className="glass-badge subtle">
                     {lucyPlaceholder
-                      ? "Lucy demo · placeholders"
+                      ? "Lucy fallback · placeholders"
                       : "Visual planning"}
                   </span>
                 </div>
@@ -2384,7 +2385,7 @@ export default function Studio() {
                         ? "Jev checked the requested item in Lucy’s live output. Visual estimate only."
                         : "Lucy is generating your live view. Jev is checking whether the requested item appears."
                       : lucyPlaceholder
-                        ? "Demo placeholders use your exact furniture descriptions and positions without spending Decart credits."
+                        ? "Fallback placeholders preserve your exact furniture descriptions and positions after Lucy could not start."
                         : source === "camera"
                           ? connections.lucy
                             ? "Lucy uses your exact description. Add a reference only when you want a specific look."
@@ -2396,9 +2397,9 @@ export default function Studio() {
                 {source === "camera" && placed && lucyPlaceholder && (
                   <div className="lucy-placeholder-note" role="status">
                     <span>
-                      <strong>Lucy demo mode</strong>
-                      No Decart credits are being used. These labeled shapes are
-                      placeholders, not generated furniture.
+                      <strong>Lucy fallback mode</strong>
+                      Decart Lucy was unavailable, so Roomie switched to labeled
+                      placeholders. These are not generated furniture.
                     </span>
                     {connections.lucy && (
                       <Button
@@ -2409,7 +2410,7 @@ export default function Studio() {
                           void startLive(items, selectedItemId, true);
                         }}
                       >
-                        Try real Lucy
+                        Retry real Lucy
                       </Button>
                     )}
                   </div>
@@ -2527,7 +2528,7 @@ export default function Studio() {
                     className="inspiration-chip"
                     onClick={() => void place("A white bookshelf")}
                   >
-                    Try a white bookshelf placeholder <ChevronRight size={16} />
+                    Try a white bookshelf <ChevronRight size={16} />
                   </button>
                   <div className="mini-note">
                     <Sparkles size={16} />

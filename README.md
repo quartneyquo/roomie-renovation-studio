@@ -21,7 +21,7 @@ npm run build
 ## Implemented
 
 - Branded desktop studio; camera request on opening, photo fallback, example living room, camera selection and privacy controls.
-- Voice-first furniture descriptions with interchangeable uploaded references and credit-free labeled placeholders for Lucy demos.
+- Voice-first furniture descriptions with interchangeable uploaded references and labeled placeholders when Lucy cannot start.
 - Pointer and keyboard placement, size, rotation, reset, remove, before/after, snapshot download and system share (download fallback).
 - Conservative image-space placement checks. The example sofa mask applies only to the example scene. Real rooms never inherit its geometry.
 - Private anonymous Convex sessions, bounded gallery, full configuration persistence, file ownership checks, image deletion, and 24-hour transient-data cleanup.
@@ -50,7 +50,7 @@ Provider secrets belong **only in Convex environment variables**, never in `.env
 | `MODAL_SPATIAL_URL`   | Modal API URL                                   |
 | `MODAL_SPATIAL_TOKEN` | Shared Modal bearer secret                      |
 
-Reload the studio after adding credentials. A “Connected” indicator means the corresponding variables exist; it is not a successful live-provider smoke test. Modal is verified at the infrastructure level: its authenticated API, NVIDIA L4 CUDA runtime, SpatialLM runtime, and SLAM3R import all passed smoke checks. A full real-room walkthrough inference is still pending. Lucy demo mode is the default and uses no Decart credits; **Try real Lucy** starts the official SDK with a short-lived client token minted by Convex.
+Reload the studio after adding credentials. A “Connected” indicator means the corresponding variables exist; it is not a successful live-provider smoke test. Modal is verified at the infrastructure level: its authenticated API, NVIDIA L4 CUDA runtime, SpatialLM runtime, and SLAM3R import all passed smoke checks. A full real-room walkthrough inference is still pending. Roomie first starts Lucy through Decart’s official SDK with a short-lived client token minted by Convex. If that session fails, the live view falls back to labeled placeholders and offers **Retry real Lucy**.
 
 Convex anonymous auth uses `JWT_PRIVATE_KEY`, `JWKS`, and `SITE_URL`, already configured on the current development deployment. A separate production deployment requires its own keys and deployment. The current preview intentionally uses the hackathon development backend.
 
@@ -66,8 +66,8 @@ Convex loads the scene server-side when evaluating with Jev. Jev receives the st
 
 Imported and current Modal snapshots do not establish camera alignment or metric scale. These flags remain false; Lucy output observation remains false. Room geometry informs Jev but does not verify generated pixels, dimensions, clearance, collision, or physical fit. Camera registration and sampling Lucy output for perception remain follow-up phases.
 
-- The scene-state iteration was smoke-tested against live Jev (`jev-1.13.0`) with an explicitly synthetic imported room fixture. Jev returned an uncertain verdict and requested verification of the generated object. The browser now reports fal, Firecrawl, and Modal configured; Lucy media, Firecrawl research, and real point-cloud inference have not been verified in this iteration. AgentMail remains unconfigured. No email was sent.
-- In a live camera view, demo mode renders every requested description or uploaded reference as a draggable placeholder. It never substitutes a stock chair. Real Lucy replaces those placeholders only after **Try real Lucy** opens a successful Decart session.
+- The scene-state iteration was smoke-tested against live Jev (`jev-1.13.0`) with an explicitly synthetic imported room fixture. A live browser smoke test also opened a Decart Lucy session for an exact white-bookshelf request and passed its output to Jev. Firecrawl research and real point-cloud inference have not been verified in this iteration. AgentMail remains unconfigured. No email was sent.
+- In a live camera view, Roomie attempts real Lucy first. If it cannot open the realtime session, every requested description or uploaded reference remains available as a draggable placeholder. It never substitutes a stock chair, and **Retry real Lucy** can replace the fallback after credits are available.
 - Placement transforms are normalized 2D image coordinates and in-plane rotation, not 3D world poses. The fallback guidance is an image-space demonstration, not a complete Function2Scene constraint engine.
 - Modal deployment is active and its private GPU probe verified an NVIDIA L4, CUDA, PyTorch, and the baked SLAM3R runtime. Walkthrough-to-point-cloud reconstruction is implemented. A full real-room walkthrough still needs live browser QA. Camera alignment, depth/occlusion tracking, and calibrated 3D collision/clearance checks are not implemented.
 - Anonymous cloud saves belong to the guest session in that browser. Clearing browser data loses access; there is no cross-device account recovery in this prototype. Download important views.
