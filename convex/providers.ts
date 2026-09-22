@@ -52,7 +52,8 @@ function occupancyFromDetection(
     top: placement.y / 100 - targetHeight / 2,
     bottom: placement.y / 100 + targetHeight / 2,
   };
-  const ignored = /^(wall|floor|ceiling|room|living room|background|sky)$/i;
+  const ignored =
+    /^(wall|floor|ceiling|room|living room|house|home|building|interior|background|image|photo|sky)$/i;
   const labels = response.results.bboxes
     .filter((box) => !ignored.test(box.label.trim()))
     .filter((box) => {
