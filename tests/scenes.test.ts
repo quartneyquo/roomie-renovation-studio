@@ -451,7 +451,7 @@ describe("versioned room understanding", () => {
     expect(result.evaluation.fit).toBe("red");
     expect(result.evaluation.explanation).toContain("overlaps Floor lamp");
   });
-  it("forces a live placement to no when the requested item is missing from Lucy output", async () => {
+  it("does not treat an empty Lucy detector result as proof the item is missing", async () => {
     const { t, alice, ownerId, args } = await setup();
     vi.stubEnv("TYPESAFE_API_KEY", "test-jev-key");
     vi.stubEnv("FAL_KEY", "test-fal-key");
@@ -524,14 +524,13 @@ describe("versioned room understanding", () => {
     const result = JSON.parse(
       (await alice.query(api.jobs.get, { id }))!.result!,
     );
-    expect(result.evaluation.fit).toBe("red");
-    expect(result.evaluation.explanation).toContain(
-      "could not find A white bookshelf",
-    );
+    expect(result.evaluation.fit).toBe("green");
+    expect(result.evaluation.explanation).toContain("no placement conflict");
     expect(result.evaluation.checks).toContainEqual(
       expect.objectContaining({
-        label: "Requested item is not visible in Lucy output",
-        status: "warn",
+        label:
+          "Requested item could not be independently confirmed in this Lucy sample",
+        status: "unknown",
       }),
     );
   });
