@@ -113,6 +113,7 @@ export default function Studio() {
     "idle" | "checking" | "ready" | "fallback"
   >("idle");
   const [clipUrl, setClipUrl] = useState<string | null>(null),
+    [clipPoster, setClipPoster] = useState<string | null>(null),
     [clipLoading, setClipLoading] = useState(false),
     [clipError, setClipError] = useState<string | null>(null),
     [lucyActive, setLucyActive] = useState(false),
@@ -120,12 +121,14 @@ export default function Studio() {
       screenshot: string;
       roomImage: string;
       revision: number;
+      label: string;
     } | null>(null),
     [emailRequestId, setEmailRequestId] = useState("");
   const activeJobs = useRef(new Map<string, () => void>()),
     latestRevision = useRef(0),
     lucy = useRef<LucySession | null>(null),
     editedVideo = useRef<HTMLVideoElement>(null),
+    h3Video = useRef<HTMLVideoElement>(null),
     mounted = useRef(true);
   const jobEpoch = useRef<Record<string, number>>({});
   const scanFile = useRef<HTMLInputElement>(null);
@@ -239,15 +242,15 @@ export default function Studio() {
   }, [cloud.ready, cloud.client]);
   useEffect(() => {
     if (!placed) {
-      setJevRunState("idle");
-      return;
+      const stateTimer = setTimeout(() => setJevRunState("idle"), 0);
+      return () => clearTimeout(stateTimer);
     }
     if (!connections.jev) {
-      setJevRunState("fallback");
-      return;
+      const stateTimer = setTimeout(() => setJevRunState("fallback"), 0);
+      return () => clearTimeout(stateTimer);
     }
-    setJevRunState("checking");
     if (!cloud.ready) return;
+    const stateTimer = setTimeout(() => setJevRunState("checking"), 0);
     const current = revision;
     const view = currentSceneKey();
     let valid = true;
@@ -270,7 +273,13 @@ export default function Studio() {
               : "Scene saved · Jev not running",
           );
           if (!placed || !connections.jev) return null;
-          return runJob("jev", { sceneKey: view }, current);
+          return source === "camera" && video.current?.videoWidth
+            ? capture(false)
+                .then((frame) => uploadImage(cloud.client!, frame))
+                .then((liveFrameId) =>
+                  runJob("jev", { sceneKey: view, liveFrameId }, current),
+                )
+            : runJob("jev", { sceneKey: view }, current);
         })
         .then((r) => {
           if (
@@ -294,10 +303,11 @@ export default function Studio() {
     }, 650);
     return () => {
       valid = false;
+      clearTimeout(stateTimer);
       clearTimeout(timer);
       activeJobs.current.get("jev")?.();
     };
-  }, [revision, placed, cloud.ready, connections.jev]);
+  }, [revision, placed, source, cloud.ready, connections.jev]);
   useEffect(() => {
     if (!placed || !cloud.ready || !connections.research) return;
     let valid = true;
@@ -393,6 +403,7 @@ export default function Studio() {
     const current = revision;
     setSuggestion(true);
     setClipUrl(null);
+    setClipPoster(null);
     setClipError(null);
     if (!connections.h3 || !cloud.client) {
       setClipLoading(false);
@@ -408,10 +419,9 @@ export default function Studio() {
     setJobMessage("Creating your suggestion clip…");
     try {
       const imageId = await uploadImage(cloud.client, await capture(false));
-      const endImageId = await uploadImage(
-        cloud.client,
-        await capture(true, evaluation.adjustment || placement),
-      );
+      const endFrame = await capture(true, evaluation.adjustment || placement);
+      setClipPoster(endFrame);
+      const endImageId = await uploadImage(cloud.client, endFrame);
       const result = await runJob(
         "h3",
         {
@@ -1043,6 +1053,66 @@ export default function Studio() {
     ctx.fillText("roomie  /  visual planning preview · not measured", 24, 785);
     return canvas.toDataURL("image/jpeg", 0.85);
   }
+  async function captureVideoFrame(media: HTMLVideoElement) {
+    if (!media.videoWidth || !media.videoHeight)
+      throw new Error("The generated clip is not ready yet.");
+    const canvas = document.createElement("canvas");
+    canvas.width = 1200;
+    canvas.height = 800;
+    const ctx = canvas.getContext("2d")!;
+    const ratio = Math.max(1200 / media.videoWidth, 800 / media.videoHeight);
+    ctx.drawImage(
+      media,
+      (1200 - media.videoWidth * ratio) / 2,
+      (800 - media.videoHeight * ratio) / 2,
+      media.videoWidth * ratio,
+      media.videoHeight * ratio,
+    );
+    ctx.fillStyle = "rgba(255,250,247,.9)";
+    ctx.fillRect(0, 758, 1200, 42);
+    ctx.fillStyle = "#78263b";
+    ctx.font = "16px sans-serif";
+    ctx.fillText("roomie  /  H3 suggestion frame · visual estimate", 24, 785);
+    return canvas.toDataURL("image/jpeg", 0.85);
+  }
+  async function captureH3Frame() {
+    if (!clipUrl) throw new Error("No H3 clip is available.");
+    if (h3Video.current?.videoWidth) return captureVideoFrame(h3Video.current);
+    const media = document.createElement("video");
+    media.crossOrigin = "anonymous";
+    media.muted = true;
+    media.playsInline = true;
+    media.preload = "auto";
+    media.src = clipUrl;
+    await new Promise<void>((resolve, reject) => {
+      const timeout = window.setTimeout(
+        () => reject(new Error("The H3 clip took too long to load.")),
+        8000,
+      );
+      media.onloadedmetadata = () => {
+        const target = Number.isFinite(media.duration)
+          ? Math.min(Math.max(media.duration * 0.72, 0), 3.8)
+          : 0;
+        if (target > 0) media.currentTime = target;
+        else {
+          window.clearTimeout(timeout);
+          resolve();
+        }
+      };
+      media.onseeked = () => {
+        window.clearTimeout(timeout);
+        resolve();
+      };
+      media.onerror = () => {
+        window.clearTimeout(timeout);
+        reject(new Error("The H3 clip could not be loaded."));
+      };
+    });
+    const frame = await captureVideoFrame(media);
+    media.removeAttribute("src");
+    media.load();
+    return frame;
+  }
   async function persistRoom(screenshot: string, bg: string, name: string) {
     if (cloud.configured) {
       if (!cloud.ready || !cloud.client)
@@ -1257,13 +1327,43 @@ export default function Studio() {
     setEmailSnapshot(null);
     setEmailRequestId(crypto.randomUUID());
     try {
+      let screenshot: string;
+      let label: string;
+      if (clipUrl) {
+        try {
+          screenshot = await captureH3Frame();
+          label = "H3 Max Turbo suggestion frame";
+        } catch {
+          if (!clipPoster) throw new Error("H3 frame unavailable");
+          screenshot = clipPoster;
+          label = "H3 Max Turbo target frame";
+        }
+      } else if (clipPoster) {
+        screenshot = clipPoster;
+        label = "H3 Max Turbo target frame";
+      } else {
+        if (source === "camera" && !lucyActive)
+          throw new Error(
+            "Start the Lucy live view or generate an H3 clip before preparing the email.",
+          );
+        screenshot = await capture();
+        label =
+          source === "camera"
+            ? "Lucy live placement frame"
+            : "Placement preview";
+      }
       setEmailSnapshot({
-        screenshot: await capture(),
+        screenshot,
         roomImage: await capture(false),
         revision,
+        label,
       });
-    } catch {
-      toast.error("Couldn’t prepare the room screenshot.");
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Couldn’t prepare the room screenshot.",
+      );
       return;
     }
     setEmailBody(
@@ -1479,6 +1579,39 @@ export default function Studio() {
                       Drag to find its place
                     </span>
                   </button>
+                )}
+                {placed && !before && source === "camera" && (
+                  <div
+                    className={`live-placement-outline ${
+                      jevRunState === "ready" && evaluation.fit === "green"
+                        ? "yes"
+                        : jevRunState === "ready"
+                          ? "no"
+                          : "checking"
+                    }`}
+                    style={{
+                      left: `${placement.x}%`,
+                      top: `${placement.y}%`,
+                      width: `${27.5 * placement.scale}%`,
+                      height: `${34 * placement.scale}%`,
+                      transform: `translate(-50%,-50%) rotate(${placement.rotation}deg)`,
+                    }}
+                    aria-label={
+                      jevRunState === "ready" && evaluation.fit === "green"
+                        ? "Jev says yes to this placement"
+                        : jevRunState === "ready"
+                          ? "Jev says no to this placement"
+                          : "Jev is checking this placement"
+                    }
+                  >
+                    <span>
+                      {jevRunState === "ready"
+                        ? evaluation.fit === "green"
+                          ? "Jev: YES"
+                          : "Jev: NO"
+                        : "Jev: CHECKING"}
+                    </span>
+                  </div>
                 )}
                 {!placed && (
                   <div className="stage-invitation">
@@ -1732,8 +1865,8 @@ export default function Studio() {
                     <span
                       className={`verdict-label ${evaluation.fit || evaluation.verdict}`}
                     >
-                      {evaluation.fit
-                        ? `${evaluation.fit.toUpperCase()}${typeof evaluation.confidence === "number" && evaluation.confidence > 0 ? ` · ${Math.round(evaluation.confidence * 100)}%` : ""}`
+                      {jevRunState === "ready" && evaluation.fit
+                        ? `${evaluation.fit === "green" ? "YES" : "NO"}${typeof evaluation.confidence === "number" && evaluation.confidence > 0 ? ` · ${Math.round(evaluation.confidence * 100)}%` : ""}`
                         : evaluation.verdict === "good"
                           ? "Nice fit"
                           : evaluation.verdict === "adjust"
@@ -1781,7 +1914,7 @@ export default function Studio() {
                   <div className="evaluation-caption">
                     {evaluation.provider}
                   </div>
-                  {roomSnapshot && (
+                  {evaluation.visualEstimate && (
                     <div className="visual-estimate-note">
                       Visual estimate only · metric calibration and
                       camera-to-scan alignment are not yet available.
@@ -1816,7 +1949,9 @@ export default function Studio() {
                     <div className="suggestion-preview">
                       {clipUrl ? (
                         <video
+                          ref={h3Video}
                           className="generated-clip"
+                          crossOrigin="anonymous"
                           src={clipUrl}
                           controls
                           autoPlay
@@ -2555,15 +2690,20 @@ export default function Studio() {
                 }}
               />
               {emailSnapshot && (
-                <img
-                  className="email-snapshot"
-                  src={emailSnapshot.screenshot}
-                  alt="Exact room screenshot attached to this email"
-                />
+                <>
+                  <img
+                    className="email-snapshot"
+                    src={emailSnapshot.screenshot}
+                    alt="Generated room placement frame attached to this email"
+                  />
+                  <span className="attachment-source">
+                    {emailSnapshot.label}
+                  </span>
+                </>
               )}
               <p className="attachment-note">
                 <ImagePlus size={16} />
-                Room screenshot and placement details
+                Generated placement frame and room details
               </p>
               <label className="checkbox-label">
                 <Checkbox

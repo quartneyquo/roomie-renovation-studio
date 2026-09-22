@@ -183,6 +183,72 @@ describe("versioned room understanding", () => {
     );
     expect(result.evaluation.explanation).toContain("visual framing only");
   });
+  it("forces a live placement to no when object detection finds an occupied target", async () => {
+    const { t, alice, ownerId, args } = await setup();
+    vi.stubEnv("TYPESAFE_API_KEY", "test-jev-key");
+    vi.stubEnv("FAL_KEY", "test-fal-key");
+    await alice.mutation(api.scenes.sync, {
+      ...args,
+      source: "camera",
+      snapshotImport: undefined,
+    });
+    const liveFrameId = await t.run(async (ctx) => {
+      const storageId = await ctx.storage.store(new Blob(["camera-frame"]));
+      await ctx.db.insert("assets", {
+        ownerId,
+        storageId,
+        saved: false,
+        expiresAt: Date.now() + 10000,
+      });
+      return storageId;
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url) => {
+        if (String(url).includes("florence-2-large"))
+          return new Response(
+            JSON.stringify({
+              results: {
+                bboxes: [{ x: 330, y: 390, w: 300, h: 300, label: "sofa" }],
+              },
+              image: { width: 1200, height: 800 },
+            }),
+            { status: 200 },
+          );
+        return new Response(
+          JSON.stringify({
+            model: "jev-test",
+            answers: {
+              placement: { choice: "yes", confidence: 0.82 },
+              adjustment: { choice: "none" },
+            },
+          }),
+          { status: 200 },
+        );
+      }),
+    );
+    const id = await t.run((ctx) =>
+      ctx.db.insert("providerJobs", {
+        ownerId,
+        kind: "jev",
+        status: "queued",
+        requestId: "occupied-live-target",
+        revision: 1,
+        input: JSON.stringify({ sceneKey: "room-a", liveFrameId }),
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        expiresAt: Date.now() + 10000,
+        attempts: 0,
+      }),
+    );
+    await t.action(internal.providers.run, { id });
+    const result = JSON.parse(
+      (await alice.query(api.jobs.get, { id }))!.result!,
+    );
+    expect(result.evaluation.fit).toBe("red");
+    expect(result.evaluation.title).toContain("No");
+    expect(result.evaluation.explanation).toContain("sofa already occupies");
+  });
   it("cancels delayed Jev results after the scene changes", async () => {
     const { t, alice, ownerId, args } = await setup();
     await alice.mutation(api.scenes.sync, args);

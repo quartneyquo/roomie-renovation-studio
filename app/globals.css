@@ -587,6 +587,54 @@ a:focus-visible {
   pointer-events: none;
   filter: drop-shadow(4px 14px 10px #3b281f30);
 }
+.live-placement-outline {
+  position: absolute;
+  z-index: 6;
+  pointer-events: none;
+  border: 4px solid;
+  border-radius: 14px;
+  box-shadow:
+    0 0 0 2px #fff9 inset,
+    0 8px 30px #27141822;
+  transition:
+    border-color 180ms ease,
+    box-shadow 180ms ease;
+}
+.live-placement-outline.yes {
+  border-color: #39a65b;
+  box-shadow:
+    0 0 0 2px #fff9 inset,
+    0 0 24px #39a65b66;
+}
+.live-placement-outline.no {
+  border-color: #cf3f50;
+  box-shadow:
+    0 0 0 2px #fff9 inset,
+    0 0 24px #cf3f5066;
+}
+.live-placement-outline.checking {
+  border-color: #fff9;
+  border-style: dashed;
+}
+.live-placement-outline > span {
+  position: absolute;
+  top: -34px;
+  left: 0;
+  border-radius: 999px;
+  padding: 6px 10px;
+  background: #23201edb;
+  color: white;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+}
+.live-placement-outline.yes > span {
+  background: #287b42ed;
+}
+.live-placement-outline.no > span {
+  background: #a52e40ed;
+}
 .item-handle {
   position: absolute;
   width: 7px;
@@ -1414,6 +1462,13 @@ a:focus-visible {
 .email-snapshot {
   width: 100%;
   border-radius: 8px;
+}
+.attachment-source {
+  display: block;
+  margin-top: -4px;
+  color: #7e685c;
+  font-size: 12px;
+  font-weight: 650;
 }
 .email-snapshot {
   max-height: 200px;
