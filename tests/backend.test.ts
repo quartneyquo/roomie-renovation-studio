@@ -68,6 +68,87 @@ describe("private room storage", () => {
       "Room not found",
     );
   });
+  it("persists and restores a complete multi-piece layout while keeping legacy rooms valid", async () => {
+    const { t, alice, a } = await setup();
+    const ids = await t.run(async (ctx) => {
+      const result = [];
+      for (let index = 0; index < 5; index++) {
+        const storageId = await ctx.storage.store(
+          new Blob([`image-${index}`], { type: "image/png" }),
+        );
+        await ctx.db.insert("assets", {
+          ownerId: a,
+          storageId,
+          saved: false,
+          expiresAt: Date.now() + 86400000,
+        });
+        result.push(storageId);
+      }
+      return result;
+    });
+    const items = [
+      {
+        id: "chair",
+        prompt: "Ivory reading chair",
+        referenceId: ids[3],
+        placement: { ...initialPlacement, x: 31, rotation: -8 },
+      },
+      {
+        id: "lamp",
+        prompt: "Brass floor lamp",
+        referenceId: ids[4],
+        placement: { ...initialPlacement, x: 72, scale: 0.76 },
+      },
+    ];
+    const id = await alice.mutation(api.rooms.save, {
+      requestId: "multi-layout",
+      name: "Reading corner",
+      prompt: items[0].prompt,
+      placement: items[0].placement,
+      source: "demo",
+      revision: 4,
+      evaluation: evaluatePlacement(items[0].placement, "demo", 4),
+      referenceId: ids[0],
+      roomImageId: ids[1],
+      screenshotId: ids[2],
+      items,
+    });
+    const saved = await alice.query(api.rooms.list, {});
+    expect(saved[0].items).toMatchObject([
+      { id: "chair", placement: { x: 31, rotation: -8 } },
+      { id: "lamp", placement: { x: 72, scale: 0.76 } },
+    ]);
+    expect(
+      saved[0].items?.every((item) => item.reference.startsWith("http")),
+    ).toBe(true);
+    await expect(
+      alice.mutation(api.rooms.save, {
+        requestId: "too-many-items",
+        name: "Too many pieces",
+        prompt: items[0].prompt,
+        placement: items[0].placement,
+        source: "demo",
+        revision: 5,
+        evaluation: evaluatePlacement(items[0].placement, "demo", 5),
+        referenceId: ids[0],
+        roomImageId: ids[1],
+        screenshotId: ids[2],
+        items: Array.from({ length: 9 }, (_, index) => ({
+          ...items[0],
+          id: `piece-${index}`,
+        })),
+      }),
+    ).rejects.toThrow("Invalid furniture layout");
+    await alice.mutation(api.rooms.remove, { id });
+    expect(
+      await t.run(async (ctx) => (await ctx.storage.get(ids[4])) !== null),
+    ).toBe(false);
+
+    const legacy = await room();
+    expect(
+      (await legacy.alice.query(api.rooms.list, {}))[0].items,
+    ).toBeUndefined();
+  });
   it("rejects another session's storage ID and invalid transforms", async () => {
     const { bob, args } = await room();
     await expect(
@@ -108,9 +189,7 @@ describe("private room storage", () => {
   it("keeps room scans owner-scoped and deletes source video after analysis", async () => {
     const { t, alice, bob } = await setup();
     const videoId = await t.run((ctx) =>
-      ctx.storage.store(
-        new Blob(["video"], { type: "video/webm;codecs=vp9" }),
-      ),
+      ctx.storage.store(new Blob(["video"], { type: "video/webm;codecs=vp9" })),
     );
     const id = await alice.mutation(api.scans.registerVideo, {
       storageId: videoId,

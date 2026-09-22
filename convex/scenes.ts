@@ -1,7 +1,7 @@
 import { v, ConvexError } from "convex/values";
 import { internalQuery } from "./_generated/server";
 import { ownerMutation } from "./rooms";
-import { placement, source } from "./schema";
+import { placement, sceneFurnitureItem, source } from "./schema";
 import { parseSnapshot, placementSchema, type SceneState } from "../lib/scene";
 
 export const sync = ownerMutation({
@@ -11,6 +11,8 @@ export const sync = ownerMutation({
     source,
     prompt: v.string(),
     placement,
+    activeItemId: v.optional(v.string()),
+    items: v.optional(v.array(sceneFurnitureItem)),
     snapshotJobId: v.optional(v.id("providerJobs")),
     snapshotImport: v.optional(v.string()),
     savedConfigurationId: v.optional(v.id("savedConfigurations")),
@@ -26,6 +28,19 @@ export const sync = ownerMutation({
       a.prompt.length > 1000
     )
       throw new ConvexError("Invalid scene state.");
+    if (
+      a.items &&
+      (a.items.length > 8 ||
+        new Set(a.items.map((item) => item.id)).size !== a.items.length ||
+        a.items.some(
+          (item) =>
+            !item.id ||
+            item.id.length > 100 ||
+            !item.prompt.trim() ||
+            item.prompt.length > 1000,
+        ))
+    )
+      throw new ConvexError("Invalid furniture layout.");
     const p = placementSchema.parse(a.placement);
     const previous = await ctx.db
       .query("sceneStates")
@@ -39,7 +54,9 @@ export const sync = ownerMutation({
       if (
         old.source !== a.source ||
         old.lucyObject.description !== a.prompt ||
-        JSON.stringify(old.lucyObject.placement) !== JSON.stringify(p)
+        JSON.stringify(old.lucyObject.placement) !== JSON.stringify(p) ||
+        old.activeItemId !== a.activeItemId ||
+        JSON.stringify(old.layout || []) !== JSON.stringify(a.items || [])
       )
         throw new ConvexError(
           "Scene revision already used. Retry with a new revision.",
@@ -90,6 +107,8 @@ export const sync = ownerMutation({
       revision: a.revision,
       source: a.source,
       room,
+      ...(a.activeItemId ? { activeItemId: a.activeItemId } : {}),
+      ...(a.items ? { layout: a.items } : {}),
       lucyObject: {
         description: a.prompt,
         placement: p,

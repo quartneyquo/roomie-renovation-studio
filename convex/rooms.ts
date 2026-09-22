@@ -11,7 +11,7 @@ import {
   customMutation,
   customQuery,
 } from "convex-helpers/server/customFunctions";
-import { evaluation, placement, source } from "./schema";
+import { evaluation, furnitureItem, placement, source } from "./schema";
 import type { Id } from "./_generated/dataModel";
 import type { SceneState } from "../lib/scene";
 export async function user(ctx: Pick<QueryCtx, "auth">) {
@@ -72,6 +72,7 @@ export const save = ownerMutation({
     source,
     revision: v.number(),
     evaluation,
+    items: v.optional(v.array(furnitureItem)),
     referenceId: v.id("_storage"),
     roomImageId: v.id("_storage"),
     screenshotId: v.id("_storage"),
@@ -96,6 +97,32 @@ export const save = ownerMutation({
       if (!Number.isFinite(n) || n < low || n > high)
         throw new ConvexError("Invalid placement.");
     }
+    if (
+      a.items &&
+      (a.items.length < 1 ||
+        a.items.length > 8 ||
+        new Set(a.items.map((item) => item.id)).size !== a.items.length ||
+        a.items.some(
+          (item) =>
+            !item.id ||
+            item.id.length > 100 ||
+            !item.prompt.trim() ||
+            item.prompt.length > 1000,
+        ))
+    )
+      throw new ConvexError("Invalid furniture layout.");
+    for (const item of a.items || []) {
+      for (const [key, low, high] of [
+        ["x", 0, 100],
+        ["y", 0, 100],
+        ["scale", 0.1, 3],
+        ["rotation", -180, 180],
+      ] as const) {
+        const value = item.placement[key];
+        if (!Number.isFinite(value) || value < low || value > high)
+          throw new ConvexError("Invalid furniture layout.");
+      }
+    }
     const old = await ctx.db
       .query("savedConfigurations")
       .withIndex("by_ownerId_and_requestId", (q) =>
@@ -111,7 +138,13 @@ export const save = ownerMutation({
       throw new ConvexError(
         "Please delete a room before saving another (50 maximum).",
       );
-    for (const id of [a.referenceId, a.roomImageId, a.screenshotId]) {
+    const assetIds = [
+      a.referenceId,
+      a.roomImageId,
+      a.screenshotId,
+      ...(a.items?.map((item) => item.referenceId) || []),
+    ].filter((id, index, all) => all.indexOf(id) === index);
+    for (const id of assetIds) {
       const file = await asset(ctx, ctx.ownerId, id);
       if (file.saved)
         throw new ConvexError("Upload a fresh copy for this room.");
@@ -147,6 +180,12 @@ export const save = ownerMutation({
     });
   },
 });
+const savedFurnitureItem = v.object({
+  id: v.string(),
+  prompt: v.string(),
+  reference: v.string(),
+  placement,
+});
 const savedView = v.object({
   id: v.string(),
   name: v.string(),
@@ -155,6 +194,7 @@ const savedView = v.object({
   source,
   revision: v.number(),
   evaluation,
+  items: v.optional(v.array(savedFurnitureItem)),
   reference: v.string(),
   roomImage: v.string(),
   screenshot: v.string(),
@@ -179,6 +219,18 @@ export const list = ownerQuery({
         source: r.source,
         revision: r.revision,
         evaluation: r.evaluation,
+        ...(r.items
+          ? {
+              items: await Promise.all(
+                r.items.map(async (item) => ({
+                  id: item.id,
+                  prompt: item.prompt,
+                  placement: item.placement,
+                  reference: (await ctx.storage.getUrl(item.referenceId))!,
+                })),
+              ),
+            }
+          : {}),
         ...(r.sceneState ? { sceneState: r.sceneState } : {}),
         createdAt: r._creationTime,
         reference: (await ctx.storage.getUrl(r.referenceId))!,
@@ -195,11 +247,13 @@ export const remove = ownerMutation({
     const room = await ctx.db.get(id);
     if (!room || room.ownerId !== ctx.ownerId)
       throw new ConvexError("Room not found.");
-    for (const storageId of [
+    const storageIds = [
       room.referenceId,
       room.roomImageId,
       room.screenshotId,
-    ]) {
+      ...(room.items?.map((item) => item.referenceId) || []),
+    ].filter((id, index, all) => all.indexOf(id) === index);
+    for (const storageId of storageIds) {
       const row = await asset(ctx, ctx.ownerId, storageId);
       await ctx.storage.delete(storageId);
       await ctx.db.delete(row._id);

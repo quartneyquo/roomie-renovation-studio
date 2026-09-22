@@ -53,6 +53,7 @@ import {
   type RoomSource,
   type SavedRoom,
   type Evaluation,
+  type FurnitureItem,
 } from "@/lib/room";
 
 import Link from "next/link";
@@ -174,6 +175,11 @@ export default function Studio() {
     [placement, setPlacement] = useState<Placement>(initialPlacement),
     [revision, setRevision] = useState(0),
     [before, setBefore] = useState(false);
+  const [items, setItems] = useState<FurnitureItem[]>([]);
+  const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
+  const [addingItem, setAddingItem] = useState(false);
+  const hasItems = items.length > 0;
+  const selectedItem = items.find((item) => item.id === selectedItemId) ?? null;
   const [busy, setBusy] = useState(false),
     [localSaved, setSaved] = useState<SavedRoom[]>([]),
     [saveName, setSaveName] = useState("A warmer living room"),
@@ -188,7 +194,12 @@ export default function Studio() {
     stage = useRef<HTMLDivElement>(null),
     roomFile = useRef<HTMLInputElement>(null),
     refFile = useRef<HTMLInputElement>(null),
-    drag = useRef<{ x: number; y: number; p: Placement } | null>(null);
+    drag = useRef<{
+      id: string;
+      x: number;
+      y: number;
+      p: Placement;
+    } | null>(null);
   const saved = cloud.rooms ?? localSaved;
   latestRevision.current = revision;
   const evaluation =
@@ -232,6 +243,12 @@ export default function Studio() {
       source,
       prompt,
       placement,
+      ...(selectedItemId ? { activeItemId: selectedItemId } : {}),
+      items: items.map((item) => ({
+        id: item.id,
+        prompt: item.prompt,
+        placement: item.placement,
+      })),
       ...snapshotSelection,
     });
   }
@@ -448,15 +465,26 @@ export default function Studio() {
     setJobMessage("Creating your suggestion clip…");
     try {
       const imageId = await uploadImage(cloud.client, await capture(false));
-      const endFrame = await capture(true, evaluation.adjustment || placement);
+      const targetPlacement = evaluation.adjustment || placement;
+      const endFrame = await capture(true, targetPlacement, false);
       setClipPoster(endFrame);
       const endImageId = await uploadImage(cloud.client, endFrame);
+      const layoutDescription = items
+        .map(
+          (item) =>
+            `${item.prompt} at ${Math.round(
+              item.id === selectedItemId ? targetPlacement.x : item.placement.x,
+            )}% from the left and ${Math.round(
+              item.id === selectedItemId ? targetPlacement.y : item.placement.y,
+            )}% from the top`,
+        )
+        .join("; ");
       const result = await runJob(
         "h3",
         {
           imageId,
           endImageId,
-          prompt: `Keep the camera fixed and room unchanged. Move only this item: ${prompt}. Show the change from the first frame to the supplied last frame. Do not add other furniture.`,
+          prompt: `Keep the camera fixed and room unchanged. Use the supplied last frame as the complete target layout. The full layout is: ${layoutDescription}. Animate the selected item, ${prompt}, into place while keeping every other listed piece visible and unchanged. Do not remove, replace, or invent furniture.`,
         },
         current,
       );
@@ -940,16 +968,68 @@ export default function Studio() {
     }
   }
 
-  const update = (change: Partial<Placement>) => {
-    setPlacement((p) => ({ ...p, ...change }));
-    setRevision((n) => n + 1);
+  function clearGeneratedSuggestion() {
     setSuggestion(false);
     setClipLoading(false);
     setClipError(null);
     setJobMessage("");
     setClipUrl(null);
     activeJobs.current.get("h3")?.();
+  }
+  const update = (change: Partial<Placement>, itemId = selectedItemId) => {
+    setPlacement((p) => ({ ...p, ...change }));
+    if (itemId)
+      setItems((current) =>
+        current.map((item) =>
+          item.id === itemId
+            ? { ...item, placement: { ...item.placement, ...change } }
+            : item,
+        ),
+      );
+    setRevision((n) => n + 1);
+    clearGeneratedSuggestion();
   };
+  function selectItem(item: FurnitureItem) {
+    if (item.id === selectedItemId && !addingItem) return;
+    setSelectedItemId(item.id);
+    setPrompt(item.prompt);
+    setReference(item.reference);
+    setPlacement(item.placement);
+    setPlaced(true);
+    setAddingItem(false);
+    setLiveEvaluation(null);
+    setRevision((n) => n + 1);
+    clearGeneratedSuggestion();
+  }
+  function beginAddItem() {
+    if (items.length >= 8) {
+      toast.info("This room already has the maximum of eight pieces.");
+      return;
+    }
+    setAddingItem(true);
+    setSelectedItemId(null);
+    setPlaced(false);
+    setPrompt("");
+    setReference("/chair.png");
+    setPlacement(initialPlacement);
+    setLiveEvaluation(null);
+    clearGeneratedSuggestion();
+  }
+  function removeSelectedItem() {
+    if (!selectedItemId) return;
+    const remaining = items.filter((item) => item.id !== selectedItemId);
+    setItems(remaining);
+    const next = remaining.at(-1) ?? null;
+    setSelectedItemId(next?.id ?? null);
+    setPlaced(!!next);
+    setAddingItem(false);
+    setPrompt(next?.prompt ?? "");
+    setReference(next?.reference ?? "/chair.png");
+    setPlacement(next?.placement ?? initialPlacement);
+    setLiveEvaluation(null);
+    setRevision((n) => n + 1);
+    clearGeneratedSuggestion();
+  }
   const toolState = useRef({ placement, source, revision, placed, prompt });
   toolState.current = { placement, source, revision, placed, prompt };
   const toolUpdate = useRef(update);
@@ -1072,12 +1152,27 @@ export default function Studio() {
       resetScene();
       setRoomImage(url);
       setSource("upload");
+      setItems([]);
+      setSelectedItemId(null);
       setRevision((n) => n + 1);
     } else {
       setReference(url);
-      setPlaced(false);
+      if (selectedItemId && !addingItem) {
+        setItems((current) =>
+          current.map((item) =>
+            item.id === selectedItemId ? { ...item, reference: url } : item,
+          ),
+        );
+        setPlaced(true);
+      } else {
+        setPlaced(false);
+      }
       setRevision((n) => n + 1);
-      toast.success("Reference ready. Place it in your room.");
+      toast.success(
+        selectedItemId && !addingItem
+          ? "Reference updated for this piece."
+          : "Reference ready. Add it to your room.",
+      );
     }
   }
   async function place() {
@@ -1085,8 +1180,29 @@ export default function Studio() {
       toast.error("Describe the item you’d like to try.");
       return;
     }
+    const isNew = addingItem || !selectedItemId;
+    if (isNew && items.length >= 8) {
+      toast.error("A room can include up to eight furniture pieces.");
+      return;
+    }
     setBusy(true);
-    setPlacement(initialPlacement);
+    const nextPlacement = isNew ? initialPlacement : placement;
+    setPlacement(nextPlacement);
+    const item: FurnitureItem = {
+      id: isNew ? crypto.randomUUID() : selectedItemId!,
+      prompt: prompt.trim(),
+      reference,
+      placement: nextPlacement,
+    };
+    setItems((current) => {
+      const exists = current.some((existing) => existing.id === item.id);
+      return exists
+        ? current.map((existing) => (existing.id === item.id ? item : existing))
+        : [...current, item];
+    });
+    setSelectedItemId(item.id);
+    setAddingItem(false);
+    setLiveEvaluation(null);
     setRevision((n) => n + 1);
     setPlaced(true);
     setBefore(false);
@@ -1102,7 +1218,11 @@ export default function Studio() {
           : "Reference placed. Drag it to explore your layout.",
     );
   }
-  async function capture(includeItem = true, transform = placement) {
+  async function capture(
+    includeItem = true,
+    transform = placement,
+    preferLucyOutput = true,
+  ) {
     const canvas = document.createElement("canvas");
     canvas.width = 1200;
     canvas.height = 800;
@@ -1116,7 +1236,10 @@ export default function Studio() {
         i.src = src;
       });
     const useLucyOutput =
-      includeItem && lucyActive && !!editedVideo.current?.videoWidth;
+      includeItem &&
+      preferLucyOutput &&
+      lucyActive &&
+      !!editedVideo.current?.videoWidth;
     const bg = useLucyOutput
       ? editedVideo.current!
       : source === "camera" && video.current?.videoWidth
@@ -1132,15 +1255,20 @@ export default function Studio() {
       w * ratio,
       h * ratio,
     );
-    if (includeItem && placed && !useLucyOutput && source !== "camera") {
-      const item = await load(reference);
-      const iw = 330 * transform.scale,
-        ih = (iw * item.height) / item.width;
-      ctx.save();
-      ctx.translate(transform.x * 12, transform.y * 8);
-      ctx.rotate((transform.rotation * Math.PI) / 180);
-      ctx.drawImage(item, -iw / 2, -ih / 2, iw, ih);
-      ctx.restore();
+    if (includeItem) {
+      for (const furniture of items) {
+        if (useLucyOutput && furniture.id === selectedItemId) continue;
+        const item = await load(furniture.reference);
+        const furniturePlacement =
+          furniture.id === selectedItemId ? transform : furniture.placement;
+        const iw = 330 * furniturePlacement.scale,
+          ih = (iw * item.height) / item.width;
+        ctx.save();
+        ctx.translate(furniturePlacement.x * 12, furniturePlacement.y * 8);
+        ctx.rotate((furniturePlacement.rotation * Math.PI) / 180);
+        ctx.drawImage(item, -iw / 2, -ih / 2, iw, ih);
+        ctx.restore();
+      }
     }
     ctx.fillStyle = "rgba(255,250,247,.9)";
     ctx.fillRect(0, 758, 1200, 42);
@@ -1217,11 +1345,17 @@ export default function Studio() {
         );
       const view = currentSceneKey();
       await syncScene();
-      const [referenceId, roomImageId, screenshotId] = await Promise.all([
-        uploadImage(cloud.client, reference),
+      const [itemReferenceIds, roomImageId, screenshotId] = await Promise.all([
+        Promise.all(
+          items.map((item) => uploadImage(cloud.client!, item.reference)),
+        ),
         uploadImage(cloud.client, bg),
         uploadImage(cloud.client, screenshot),
       ]);
+      const activeIndex = items.findIndex((item) => item.id === selectedItemId);
+      const referenceId = itemReferenceIds[activeIndex >= 0 ? activeIndex : 0];
+      if (!referenceId)
+        throw new Error("Select a furniture piece before saving this room.");
       if (latestRevision.current !== revision || sceneKey.current !== view)
         throw new Error("Room changed while saving. Please save again.");
       return cloud.client.mutation(api.rooms.save, {
@@ -1236,6 +1370,12 @@ export default function Studio() {
         roomImageId,
         screenshotId,
         sceneKey: view,
+        items: items.map((item, index) => ({
+          id: item.id,
+          prompt: item.prompt,
+          placement: item.placement,
+          referenceId: itemReferenceIds[index],
+        })),
       });
     }
     const entry: SavedRoom = {
@@ -1250,6 +1390,7 @@ export default function Studio() {
       source: source === "camera" ? "upload" : source,
       revision,
       evaluation,
+      items,
     };
     const next = [entry, ...saved];
     localStorage.setItem("roomie-saved", JSON.stringify(next));
@@ -1410,10 +1551,28 @@ export default function Studio() {
     }
     setSource(room.source);
     setRoomImage(room.roomImage);
-    setReference(room.reference);
-    setPlacement(room.placement);
-    setPrompt(room.prompt);
+    const restored = room.items?.length
+      ? room.items.slice(0, 8).map((item) => ({
+          ...item,
+          placement: { ...item.placement },
+        }))
+      : [
+          {
+            id: crypto.randomUUID(),
+            prompt: room.prompt,
+            reference: room.reference,
+            placement: { ...room.placement },
+          },
+        ];
+    const active = restored[0];
+    setItems(restored);
+    setSelectedItemId(active.id);
+    setPlacement(active.placement);
+    setPrompt(active.prompt);
+    setReference(active.reference);
     setPlaced(true);
+    setAddingItem(false);
+    setLiveEvaluation(null);
     setBefore(false);
     setRevision((n) => n + 1);
     setTab("studio");
@@ -1528,7 +1687,7 @@ export default function Studio() {
                 setSaveName("A warmer living room");
                 setDialog("save");
               }}
-              disabled={!placed || busy}
+              disabled={!hasItems || !selectedItemId || !prompt.trim() || busy}
             >
               <Bookmark />
               Save this room
@@ -1572,20 +1731,23 @@ export default function Studio() {
                 onPointerMove={(e) => {
                   if (!drag.current || !stage.current) return;
                   const b = stage.current.getBoundingClientRect();
-                  update({
-                    x: clamp(
-                      drag.current.p.x +
-                        ((e.clientX - drag.current.x) / b.width) * 100,
-                      8,
-                      92,
-                    ),
-                    y: clamp(
-                      drag.current.p.y +
-                        ((e.clientY - drag.current.y) / b.height) * 100,
-                      15,
-                      88,
-                    ),
-                  });
+                  update(
+                    {
+                      x: clamp(
+                        drag.current.p.x +
+                          ((e.clientX - drag.current.x) / b.width) * 100,
+                        8,
+                        92,
+                      ),
+                      y: clamp(
+                        drag.current.p.y +
+                          ((e.clientY - drag.current.y) / b.height) * 100,
+                        15,
+                        88,
+                      ),
+                    },
+                    drag.current.id,
+                  );
                 }}
                 onPointerUp={() => {
                   drag.current = null;
@@ -1641,51 +1803,92 @@ export default function Studio() {
                   </span>
                   <span className="glass-badge subtle">Visual planning</span>
                 </div>
-                {placed && !before && source !== "camera" && (
-                  <button
-                    className={`placed-item ${evaluation.verdict}`}
-                    aria-label="Move placed item. Use arrow keys to adjust position."
-                    style={{
-                      left: `${placement.x}%`,
-                      top: `${placement.y}%`,
-                      width: `${27.5 * placement.scale}%`,
-                      transform: `translate(-50%,-50%) rotate(${placement.rotation}deg)`,
-                    }}
-                    onPointerDown={(e) => {
-                      e.currentTarget.setPointerCapture(e.pointerId);
-                      drag.current = {
-                        x: e.clientX,
-                        y: e.clientY,
-                        p: placement,
-                      };
-                    }}
-                    onKeyDown={(e) => {
-                      const dirs: Record<string, [number, number]> = {
-                        ArrowLeft: [-1, 0],
-                        ArrowRight: [1, 0],
-                        ArrowUp: [0, -1],
-                        ArrowDown: [0, 1],
-                      };
-                      if (dirs[e.key]) {
-                        e.preventDefault();
-                        update({
-                          x: clamp(placement.x + dirs[e.key][0], 8, 92),
-                          y: clamp(placement.y + dirs[e.key][1], 15, 88),
-                        });
-                      }
-                    }}
-                  >
-                    <img src={reference} alt={prompt} draggable={false} />
-                    <span className="item-handle tl" />
-                    <span className="item-handle tr" />
-                    <span className="item-handle bl" />
-                    <span className="item-handle br" />
-                    <span className="item-tag">
-                      <Move size={12} />
-                      Drag to find its place
-                    </span>
-                  </button>
-                )}
+                {hasItems &&
+                  !before &&
+                  items.map((item) => {
+                    const selected = item.id === selectedItemId;
+                    const generatedByLucy =
+                      source === "camera" &&
+                      lucyActive &&
+                      selected &&
+                      jevRunState === "ready" &&
+                      evaluation.fit === "green";
+                    return (
+                      <button
+                        key={item.id}
+                        className={`placed-item ${
+                          selected ? evaluation.verdict : ""
+                        } ${selected ? "selected" : ""} ${
+                          generatedByLucy ? "lucy-selected" : ""
+                        }`}
+                        aria-label={`Select and move ${item.prompt}. Use arrow keys to adjust position.`}
+                        aria-pressed={selected}
+                        style={{
+                          left: `${item.placement.x}%`,
+                          top: `${item.placement.y}%`,
+                          width: `${27.5 * item.placement.scale}%`,
+                          transform: `translate(-50%,-50%) rotate(${item.placement.rotation}deg)`,
+                        }}
+                        onClick={() => {
+                          if (!selected) selectItem(item);
+                        }}
+                        onPointerDown={(e) => {
+                          e.currentTarget.setPointerCapture(e.pointerId);
+                          if (!selected) selectItem(item);
+                          drag.current = {
+                            id: item.id,
+                            x: e.clientX,
+                            y: e.clientY,
+                            p: item.placement,
+                          };
+                        }}
+                        onKeyDown={(e) => {
+                          const dirs: Record<string, [number, number]> = {
+                            ArrowLeft: [-1, 0],
+                            ArrowRight: [1, 0],
+                            ArrowUp: [0, -1],
+                            ArrowDown: [0, 1],
+                          };
+                          if (dirs[e.key]) {
+                            e.preventDefault();
+                            if (!selected) selectItem(item);
+                            update(
+                              {
+                                x: clamp(
+                                  item.placement.x + dirs[e.key][0],
+                                  8,
+                                  92,
+                                ),
+                                y: clamp(
+                                  item.placement.y + dirs[e.key][1],
+                                  15,
+                                  88,
+                                ),
+                              },
+                              item.id,
+                            );
+                          }
+                        }}
+                      >
+                        <img
+                          src={item.reference}
+                          alt={item.prompt}
+                          draggable={false}
+                        />
+                        {selected && (
+                          <>
+                            <span className="item-handle tl" />
+                            <span className="item-handle tr" />
+                            <span className="item-handle bl" />
+                            <span className="item-handle br" />
+                            <span className="item-tag">
+                              <Move size={12} /> Drag to find its place
+                            </span>
+                          </>
+                        )}
+                      </button>
+                    );
+                  })}
                 {placed && !before && source === "camera" && (
                   <div
                     className={`live-frame-verdict-badge ${
@@ -1710,7 +1913,7 @@ export default function Studio() {
                       : "Jev: CHECKING"}
                   </div>
                 )}
-                {!placed && (
+                {!hasItems && (
                   <div className="stage-invitation">
                     <span className="invite-icon">
                       <Plus />
@@ -1726,7 +1929,7 @@ export default function Studio() {
                   <span className="glass-badge">
                     {before
                       ? "Original room"
-                      : placed
+                      : hasItems
                         ? "Your new perspective"
                         : "A blank canvas for your ideas"}
                   </span>
@@ -1787,11 +1990,16 @@ export default function Studio() {
                   </button>
                 </p>
               </div>
-              {placed && (
+              {selectedItem && placed && (
                 <div className="transform-card">
                   <div>
-                    <div className="eyebrow">MAKE IT YOURS</div>
-                    <h3>Find the right fit.</h3>
+                    <div className="eyebrow">
+                      SELECTED ·{" "}
+                      {items.findIndex((item) => item.id === selectedItemId) +
+                        1}{" "}
+                      OF {items.length}
+                    </div>
+                    <h3>{selectedItem.prompt}</h3>
                   </div>
                   <div className="range-control">
                     <label>
@@ -1831,10 +2039,7 @@ export default function Studio() {
                     variant="ghost"
                     size="icon"
                     aria-label="Remove item"
-                    onClick={() => {
-                      setPlaced(false);
-                      setSuggestion(false);
-                    }}
+                    onClick={removeSelectedItem}
                   >
                     <Trash2 />
                   </Button>
@@ -1852,12 +2057,27 @@ export default function Studio() {
                 </div>
               </div>
               <div className="prompt-block">
-                <label htmlFor="idea">What are you imagining?</label>
+                <label htmlFor="idea">
+                  {addingItem
+                    ? "What would you like to add?"
+                    : selectedItem
+                      ? "Selected piece"
+                      : "What are you imagining?"}
+                </label>
                 <Textarea
                   id="idea"
                   value={prompt}
                   onChange={(e) => {
-                    setPrompt(e.target.value);
+                    const nextPrompt = e.target.value;
+                    setPrompt(nextPrompt);
+                    if (selectedItemId && !addingItem)
+                      setItems((current) =>
+                        current.map((item) =>
+                          item.id === selectedItemId
+                            ? { ...item, prompt: nextPrompt }
+                            : item,
+                        ),
+                      );
                     setRevision((n) => n + 1);
                     setSuggestion(false);
                   }}
@@ -1884,9 +2104,11 @@ export default function Studio() {
                   <Sparkles />
                   {busy
                     ? "Finding its place…"
-                    : placed
-                      ? "Try this idea again"
-                      : "Place it in my room"}
+                    : addingItem
+                      ? "Add to my room"
+                      : placed
+                        ? "Update this item"
+                        : "Place it in my room"}
                   <ArrowRight />
                 </Button>
                 <p className="microcopy">
@@ -1911,6 +2133,53 @@ export default function Studio() {
                   </div>
                 )}
               </div>
+              {hasItems && (
+                <section
+                  className="layout-pieces"
+                  aria-label="Furniture layout"
+                >
+                  <div className="layout-pieces-heading">
+                    <span>Furniture layout</span>
+                    <span>{items.length} / 8 pieces</span>
+                  </div>
+                  <div className="layout-piece-list">
+                    {items.map((item, index) => (
+                      <button
+                        key={item.id}
+                        className={item.id === selectedItemId ? "active" : ""}
+                        aria-pressed={item.id === selectedItemId}
+                        onClick={() => selectItem(item)}
+                      >
+                        <img src={item.reference} alt="" />
+                        <span>{item.prompt}</span>
+                        <small>{index + 1}</small>
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              )}
+              {hasItems && !addingItem && (
+                <Button
+                  variant="outline"
+                  className="full add-furniture"
+                  onClick={beginAddItem}
+                  disabled={items.length >= 8}
+                >
+                  <Plus />
+                  {items.length >= 8
+                    ? "Room layout full · 8 pieces"
+                    : "Add another piece"}
+                </Button>
+              )}
+              {addingItem && hasItems && (
+                <Button
+                  variant="ghost"
+                  className="full cancel-add-furniture"
+                  onClick={() => selectItem(items[items.length - 1])}
+                >
+                  Cancel adding this piece
+                </Button>
+              )}
               <section
                 className="scene-understanding"
                 aria-label="Room understanding"
@@ -1939,17 +2208,20 @@ export default function Studio() {
                 )}
                 <small>Room video is uploaded for GPU processing.</small>
               </section>
-              {!placed ? (
+              {!selectedItem ? (
                 <div className="empty-guidance">
                   <div className="eyebrow">A LITTLE INSPIRATION</div>
                   <h3>
-                    Small change.
-                    <br />
-                    Entirely new feeling.
+                    {addingItem ? "Add another layer." : "Small change."}
+                    <br />{" "}
+                    {addingItem
+                      ? "Keep the room you built."
+                      : "Entirely new feeling."}
                   </h3>
                   <p>
-                    Try one piece, move it around, and see your space in a
-                    different light.
+                    {addingItem
+                      ? "Describe or upload the next piece. Everything already in the room will stay in place."
+                      : "Try one piece, move it around, and see your space in a different light."}
                   </p>
                   <button
                     className="inspiration-chip"
@@ -2185,6 +2457,9 @@ export default function Studio() {
                       {cloud.ready
                         ? "Private cloud save"
                         : "Saved on this browser"}
+                      {" · "}
+                      {room.items?.length || 1}{" "}
+                      {(room.items?.length || 1) === 1 ? "piece" : "pieces"}
                     </p>
                     <Button
                       variant="ghost"

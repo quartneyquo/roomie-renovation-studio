@@ -5,6 +5,12 @@ export type Placement = {
   rotation: number;
 };
 export type RoomSource = "demo" | "camera" | "upload";
+export type FurnitureItem = {
+  id: string;
+  prompt: string;
+  reference: string;
+  placement: Placement;
+};
 export type Evaluation = {
   verdict: "good" | "adjust" | "uncertain";
   title: string;
@@ -81,4 +87,5 @@ export type SavedRoom = {
   source: RoomSource;
   revision: number;
   evaluation: Evaluation;
+  items?: FurnitureItem[];
 };

@@ -56,6 +56,12 @@ export type SceneState = {
   revision: number;
   source: RoomSource;
   room: SpatialSnapshot | null;
+  activeItemId?: string;
+  layout?: Array<{
+    id: string;
+    prompt: string;
+    placement: Placement;
+  }>;
   lucyObject: {
     description: string;
     placement: Placement;

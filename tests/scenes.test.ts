@@ -249,6 +249,60 @@ describe("versioned room understanding", () => {
     expect(result.evaluation.title).toContain("No");
     expect(result.evaluation.explanation).toContain("sofa already occupies");
   });
+  it("gives Jev the full layout and rejects overlap with another planned piece", async () => {
+    const { t, alice, ownerId, args } = await setup();
+    vi.stubEnv("TYPESAFE_API_KEY", "test-jev-key");
+    let seen: Record<string, unknown> | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url, options) => {
+        seen = JSON.parse(JSON.parse(options.body).state);
+        return new Response(
+          JSON.stringify({
+            model: "jev-layout-test",
+            answers: {
+              placement: { choice: "yes", confidence: 0.93 },
+              adjustment: { choice: "none" },
+            },
+          }),
+          { status: 200 },
+        );
+      }),
+    );
+    await alice.mutation(api.scenes.sync, {
+      ...args,
+      activeItemId: "chair",
+      items: [
+        { id: "chair", prompt: "Reading chair", placement: initialPlacement },
+        {
+          id: "lamp",
+          prompt: "Floor lamp",
+          placement: { ...initialPlacement, x: 43 },
+        },
+      ],
+    });
+    const id = await t.run((ctx) =>
+      ctx.db.insert("providerJobs", {
+        ownerId,
+        kind: "jev",
+        status: "queued",
+        requestId: "layout-overlap",
+        revision: 1,
+        input: JSON.stringify({ sceneKey: "room-a" }),
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        expiresAt: Date.now() + 10000,
+        attempts: 0,
+      }),
+    );
+    await t.action(internal.providers.run, { id });
+    const result = JSON.parse(
+      (await alice.query(api.jobs.get, { id }))!.result!,
+    );
+    expect((seen!.scene as SceneState).layout).toHaveLength(2);
+    expect(result.evaluation.fit).toBe("red");
+    expect(result.evaluation.explanation).toContain("overlaps Floor lamp");
+  });
   it("forces a live placement to no when the requested item is missing from Lucy output", async () => {
     const { t, alice, ownerId, args } = await setup();
     vi.stubEnv("TYPESAFE_API_KEY", "test-jev-key");

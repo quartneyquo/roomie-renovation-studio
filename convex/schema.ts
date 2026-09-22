@@ -7,6 +7,17 @@ export const placement = v.object({
   scale: v.number(),
   rotation: v.number(),
 });
+export const furnitureItem = v.object({
+  id: v.string(),
+  prompt: v.string(),
+  referenceId: v.id("_storage"),
+  placement,
+});
+export const sceneFurnitureItem = v.object({
+  id: v.string(),
+  prompt: v.string(),
+  placement,
+});
 export const source = v.union(
   v.literal("demo"),
   v.literal("camera"),
@@ -85,6 +96,7 @@ export default defineSchema({
     source,
     revision: v.number(),
     evaluation,
+    items: v.optional(v.array(furnitureItem)),
     referenceId: v.id("_storage"),
     roomImageId: v.id("_storage"),
     screenshotId: v.id("_storage"),
