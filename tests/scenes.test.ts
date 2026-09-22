@@ -461,19 +461,22 @@ describe("versioned room understanding", () => {
       prompt: "A white bookshelf",
       snapshotImport: undefined,
     });
-    const [liveFrameId, lucyFrameId] = await t.run(async (ctx) =>
-      Promise.all(
-        ["camera-frame", "lucy-frame"].map(async (content) => {
-          const storageId = await ctx.storage.store(new Blob([content]));
-          await ctx.db.insert("assets", {
-            ownerId,
-            storageId,
-            saved: false,
-            expiresAt: Date.now() + 10000,
-          });
-          return storageId;
-        }),
-      ),
+    const [liveFrameId, firstLucyFrameId, secondLucyFrameId] = await t.run(
+      async (ctx) =>
+        Promise.all(
+          ["camera-frame", "lucy-frame-one", "lucy-frame-two"].map(
+            async (content) => {
+              const storageId = await ctx.storage.store(new Blob([content]));
+              await ctx.db.insert("assets", {
+                ownerId,
+                storageId,
+                saved: false,
+                expiresAt: Date.now() + 10000,
+              });
+              return storageId;
+            },
+          ),
+        ),
     );
     vi.stubGlobal(
       "fetch",
@@ -508,7 +511,7 @@ describe("versioned room understanding", () => {
         input: JSON.stringify({
           sceneKey: "room-a",
           liveFrameId,
-          lucyFrameId,
+          lucyFrameIds: [firstLucyFrameId, secondLucyFrameId],
           lucyOutputObserved: true,
         }),
         createdAt: Date.now(),
@@ -531,6 +534,80 @@ describe("versioned room understanding", () => {
         status: "warn",
       }),
     );
+  });
+  it("keeps Jev neutral when only one Lucy sample misses", async () => {
+    const { t, alice, ownerId, args } = await setup();
+    vi.stubEnv("TYPESAFE_API_KEY", "test-jev-key");
+    vi.stubEnv("FAL_KEY", "test-fal-key");
+    await alice.mutation(api.scenes.sync, {
+      ...args,
+      source: "camera",
+      prompt: "A white bookshelf",
+      snapshotImport: undefined,
+    });
+    const [liveFrameId, lucyFrameId] = await t.run(async (ctx) =>
+      Promise.all(
+        ["camera-frame", "single-lucy-frame"].map(async (content) => {
+          const storageId = await ctx.storage.store(new Blob([content]));
+          await ctx.db.insert("assets", {
+            ownerId,
+            storageId,
+            saved: false,
+            expiresAt: Date.now() + 10000,
+          });
+          return storageId;
+        }),
+      ),
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url) => {
+        if (String(url).includes("florence-2-large"))
+          return new Response(
+            JSON.stringify({
+              results: { bboxes: [] },
+              image: { width: 1200, height: 800 },
+            }),
+            { status: 200 },
+          );
+        return new Response(
+          JSON.stringify({
+            model: "jev-test",
+            answers: {
+              placement: { choice: "yes", confidence: 0.82 },
+              adjustment: { choice: "none" },
+            },
+          }),
+          { status: 200 },
+        );
+      }),
+    );
+    const id = await t.run((ctx) =>
+      ctx.db.insert("providerJobs", {
+        ownerId,
+        kind: "jev",
+        status: "queued",
+        requestId: "single-lucy-miss",
+        revision: 1,
+        input: JSON.stringify({
+          sceneKey: "room-a",
+          liveFrameId,
+          lucyFrameId,
+          lucyOutputObserved: true,
+        }),
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        expiresAt: Date.now() + 10000,
+        attempts: 0,
+      }),
+    );
+    await t.action(internal.providers.run, { id });
+    const result = JSON.parse(
+      (await alice.query(api.jobs.get, { id }))!.result!,
+    );
+    expect(result.evaluation.fit).toBe("amber");
+    expect(result.evaluation.verdict).toBe("uncertain");
+    expect(result.evaluation.title).toContain("Checking");
   });
   it("cancels delayed Jev results after the scene changes", async () => {
     const { t, alice, ownerId, args } = await setup();

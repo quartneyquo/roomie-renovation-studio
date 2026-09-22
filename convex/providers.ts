@@ -297,6 +297,7 @@ export const run = internalAction({
             sceneKey: z.string().optional(),
             liveFrameId: z.string().optional(),
             lucyFrameId: z.string().optional(),
+            lucyFrameIds: z.array(z.string()).max(2).optional(),
             lucyOutputObserved: z.boolean().optional(),
           })
           .passthrough()
@@ -359,28 +360,52 @@ export const run = internalAction({
               occupancy = { status: "unavailable", labels: [] };
             }
           }
-          if (jevInput.lucyFrameId && process.env.FAL_KEY) {
-            try {
-              const imageUrl = await ctx.runQuery(internal.providers.ownedUrl, {
-                ownerId: job.ownerId,
-                id: jevInput.lucyFrameId as Id<"_storage">,
-              });
-              const detection = detectionSchema.parse(
-                await request(
-                  "https://fal.run/fal-ai/florence-2-large/open-vocabulary-detection",
-                  process.env.FAL_KEY,
-                  { image_url: imageUrl, text_input: state.prompt },
-                  "Key",
-                ),
-              );
-              const labels = occupancyFromDetection(detection, state.placement);
-              lucyOutput = {
-                status: labels.length ? "detected" : "missing",
-                labels,
-              };
-            } catch {
-              lucyOutput = { status: "unavailable", labels: [] };
+          const lucyFrameIds = (
+            jevInput.lucyFrameIds?.length
+              ? jevInput.lucyFrameIds
+              : jevInput.lucyFrameId
+                ? [jevInput.lucyFrameId]
+                : []
+          ).slice(0, 2);
+          if (lucyFrameIds.length && process.env.FAL_KEY) {
+            let successfulSamples = 0;
+            const detectedLabels = new Set<string>();
+            for (const frameId of lucyFrameIds) {
+              try {
+                const imageUrl = await ctx.runQuery(
+                  internal.providers.ownedUrl,
+                  {
+                    ownerId: job.ownerId,
+                    id: frameId as Id<"_storage">,
+                  },
+                );
+                const detection = detectionSchema.parse(
+                  await request(
+                    "https://fal.run/fal-ai/florence-2-large/open-vocabulary-detection",
+                    process.env.FAL_KEY,
+                    { image_url: imageUrl, text_input: state.prompt },
+                    "Key",
+                  ),
+                );
+                successfulSamples++;
+                for (const label of occupancyFromDetection(
+                  detection,
+                  state.placement,
+                ))
+                  detectedLabels.add(label);
+              } catch {
+                // A failed detector call is unknown evidence, never a rejection.
+              }
             }
+            const labels = [...detectedLabels].slice(0, 4);
+            lucyOutput = {
+              status: labels.length
+                ? "detected"
+                : successfulSamples >= 2
+                  ? "missing"
+                  : "unavailable",
+              labels,
+            };
           }
         }
         const reviewChecks = [
@@ -581,13 +606,18 @@ export const run = internalAction({
               : null);
           if (!decisionAnswer)
             throw new Error("Jev returned no yes-or-no placement result.");
-          const forcedNo =
+          const confirmedNo =
             !!baseline.adjustment ||
             layoutConflicts.length > 0 ||
             occupancy?.status === "occupied" ||
-            occupancy?.status === "unavailable" ||
-            (state.source === "camera" && lucyOutput?.status !== "detected");
-          const approved = decisionAnswer.choice === "yes" && !forcedNo;
+            lucyOutput?.status === "missing";
+          const unresolved =
+            !confirmedNo &&
+            state.source === "camera" &&
+            (occupancy?.status === "unavailable" ||
+              lucyOutput?.status === "unavailable");
+          const approved =
+            decisionAnswer.choice === "yes" && !confirmedNo && !unresolved;
           const confidence =
             occupancy?.status === "occupied"
               ? Math.max(decisionAnswer.confidence, 0.9)
@@ -598,8 +628,16 @@ export const run = internalAction({
                   : lucyOutput?.status === "unavailable"
                     ? Math.min(decisionAnswer.confidence, 0.5)
                     : decisionAnswer.confidence;
-          const fit = approved ? ("green" as const) : ("red" as const);
-          const verdict = approved ? ("good" as const) : ("adjust" as const);
+          const fit = unresolved
+            ? ("amber" as const)
+            : approved
+              ? ("green" as const)
+              : ("red" as const);
+          const verdict = unresolved
+            ? ("uncertain" as const)
+            : approved
+              ? ("good" as const)
+              : ("adjust" as const);
           const roomContext = scene?.room
             ? `${roomSummary(scene.room)} inform this review. `
             : "";
@@ -612,9 +650,9 @@ export const run = internalAction({
                 : baseline.adjustment
                   ? `No. ${baseline.explanation}`
                   : occupancy?.status === "unavailable"
-                    ? "No. Jev could not verify that the intended area is clear in the live frame."
+                    ? "Checking. Jev could not yet verify that the intended area is clear in the live frame."
                     : lucyOutput?.status === "unavailable"
-                      ? "No. Jev could not inspect Lucy’s generated frame for the requested item."
+                      ? "Checking. Jev needs another stable Lucy frame before deciding."
                       : approved
                         ? "Yes. The intended area appears clear and the item looks visually suitable there."
                         : "No. Jev could not confidently approve this visual placement.";
@@ -629,9 +667,11 @@ export const run = internalAction({
               confidence,
               visualEstimate: true,
               provider: `Jev · ${answer.model} · visual planning`,
-              title: approved
-                ? "Yes · good visual fit"
-                : "No · choose another spot",
+              title: unresolved
+                ? "Checking · hold this view"
+                : approved
+                  ? "Yes · good visual fit"
+                  : "No · choose another spot",
               explanation: `${roomContext}${explanation}${baseline.adjustment && answer.answers.adjustment.choice === "open_area" ? " The suggested adjustment addresses the visual framing only." : ""} Visual estimate only; camera alignment and metric scale are not calibrated.`,
               adjustment:
                 answer.answers.adjustment.choice === "open_area"

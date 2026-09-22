@@ -167,6 +167,10 @@ export default function Studio() {
     [preferLucyPlaceholders, setPreferLucyPlaceholders] = useState(false),
     [lucySettling, setLucySettling] = useState(false),
     [lucyError, setLucyError] = useState(""),
+    [lockedLucyFrame, setLockedLucyFrame] = useState<{
+      revision: number;
+      dataUrl: string;
+    } | null>(null),
     [emailSnapshot, setEmailSnapshot] = useState<{
       screenshot: string;
       roomImage: string;
@@ -241,7 +245,9 @@ export default function Studio() {
   const hasItems = items.length > 0;
   const selectedItem = items.find((item) => item.id === selectedItemId) ?? null;
   const lucyPlaceholder = source === "camera" && lucyState === "placeholder";
-  const lucyVisualReady = lucyActive || lucyPlaceholder;
+  const lockedLucyFrameUrl =
+    lockedLucyFrame?.revision === revision ? lockedLucyFrame.dataUrl : "";
+  const lucyVisualReady = lucyActive || lucyPlaceholder || !!lockedLucyFrameUrl;
   const [busy, setBusy] = useState(false),
     [localSaved, setSaved] = useState<SavedRoom[]>([]),
     [saveName, setSaveName] = useState("A warmer living room"),
@@ -287,6 +293,7 @@ export default function Studio() {
   }
   function beginLucySettling(duration = 3_500) {
     if (lucySettleTimer.current) clearTimeout(lucySettleTimer.current);
+    setLockedLucyFrame(null);
     setLucySettling(true);
     lucySettleTimer.current = setTimeout(() => {
       lucySettleTimer.current = null;
@@ -301,6 +308,7 @@ export default function Studio() {
     setRoomSnapshot(null);
     setSnapshotSelection({});
     setLiveEvaluation(null);
+    setLockedLucyFrame(null);
     setJevRunState("idle");
     setSceneStatus("New room view · attach a scan");
   }
@@ -364,7 +372,7 @@ export default function Studio() {
     const timer = setTimeout(() => {
       setSceneStatus("Updating room understanding…");
       void syncScene()
-        .then((state) => {
+        .then(async (state) => {
           if (
             !valid ||
             latestRevision.current !== current ||
@@ -380,27 +388,39 @@ export default function Studio() {
               : "Scene saved · Jev not running",
           );
           if (!placed || !connections.jev) return null;
-          return source === "camera" && video.current?.videoWidth
-            ? Promise.all([capture(false), capture(true)])
-                .then(([originalFrame, lucyFrame]) =>
-                  Promise.all([
-                    uploadImage(cloud.client!, originalFrame),
-                    uploadImage(cloud.client!, lucyFrame),
-                  ]),
-                )
-                .then(([liveFrameId, lucyFrameId]) =>
-                  runJob(
-                    "jev",
-                    {
-                      sceneKey: view,
-                      liveFrameId,
-                      lucyFrameId,
-                      lucyOutputObserved: lucyActive,
-                    },
-                    current,
-                  ),
-                )
-            : runJob("jev", { sceneKey: view }, current);
+          if (source !== "camera" || !video.current?.videoWidth)
+            return runJob("jev", { sceneKey: view }, current);
+          const originalFrame = await capture(false);
+          const lucyFrames: string[] = [];
+          if (lucyActive && editedVideo.current?.videoWidth) {
+            lucyFrames.push(await captureLucyOutputFrame());
+            await new Promise((resolve) => window.setTimeout(resolve, 450));
+            if (
+              !valid ||
+              latestRevision.current !== current ||
+              sceneKey.current !== view
+            )
+              return null;
+            lucyFrames.push(await captureLucyOutputFrame());
+            setLockedLucyFrame({
+              revision: current,
+              dataUrl: lucyFrames.at(-1)!,
+            });
+          }
+          const [liveFrameId, ...lucyFrameIds] = await Promise.all([
+            uploadImage(cloud.client!, originalFrame),
+            ...lucyFrames.map((frame) => uploadImage(cloud.client!, frame)),
+          ]);
+          return runJob(
+            "jev",
+            {
+              sceneKey: view,
+              liveFrameId,
+              ...(lucyFrameIds.length ? { lucyFrameIds } : {}),
+              lucyOutputObserved: lucyFrameIds.length > 0,
+            },
+            current,
+          );
         })
         .then((r) => {
           if (
@@ -550,27 +570,23 @@ export default function Studio() {
       setClipError("H3 Max Turbo is not connected.");
       return;
     }
-    if (source === "camera" && !lucyActive) {
+    if (source === "camera" && !lockedLucyFrameUrl) {
       setClipLoading(false);
-      setClipError("Wait for Lucy's generated stream before creating a clip.");
+      setClipError("Hold steady while Roomie locks this Lucy layout.");
       return;
     }
     setClipLoading(true);
     setJobMessage("Creating your suggestion clip…");
     try {
-      const imageId = await uploadImage(cloud.client, await capture(false));
-      const targetPlacement = evaluation.adjustment || placement;
-      const endFrame = await capture(true, targetPlacement, false);
-      setClipPoster(endFrame);
-      const endImageId = await uploadImage(cloud.client, endFrame);
+      const targetFrame =
+        source === "camera" ? lockedLucyFrameUrl : await capture(true);
+      setClipPoster(targetFrame);
+      const imageId = await uploadImage(cloud.client, targetFrame);
+      const endImageId = imageId;
       const layoutDescription = items
         .map(
           (item) =>
-            `${item.prompt} at ${Math.round(
-              item.id === selectedItemId ? targetPlacement.x : item.placement.x,
-            )}% from the left and ${Math.round(
-              item.id === selectedItemId ? targetPlacement.y : item.placement.y,
-            )}% from the top`,
+            `${item.prompt} at ${Math.round(item.placement.x)}% from the left and ${Math.round(item.placement.y)}% from the top`,
         )
         .join("; ");
       const result = await runJob(
@@ -578,7 +594,7 @@ export default function Studio() {
         {
           imageId,
           endImageId,
-          prompt: `Keep the camera fixed and room unchanged. Use the supplied last frame as the complete target layout. The full layout is: ${layoutDescription}. Animate the selected item, ${prompt}, into place while keeping every other listed piece visible and unchanged. Do not remove, replace, or invent furniture.`,
+          prompt: `Keep the camera fixed and preserve the supplied frame exactly as the complete furniture layout. The full layout is: ${layoutDescription}. Add only subtle natural motion without changing any furniture's identity, appearance, size, position, count, or color. The first and last frame must match. Do not remove, replace, duplicate, or invent furniture.`,
         },
         current,
       );
@@ -1218,6 +1234,7 @@ export default function Studio() {
     setLucyState("idle");
     setPreferLucyPlaceholders(false);
     setLucyError("");
+    setLockedLucyFrame(null);
     lucyLastInstruction.current = "";
     lucyLastReference.current = "";
     if (editedVideo.current) editedVideo.current.srcObject = null;
@@ -1488,6 +1505,28 @@ export default function Studio() {
           : `“${description}” is ready for Lucy to generate.`,
     );
   }
+  async function captureLucyOutputFrame() {
+    const media = editedVideo.current;
+    if (!media?.videoWidth || !media.videoHeight)
+      throw new Error("Lucy’s generated frame is not ready yet.");
+    const canvas = document.createElement("canvas");
+    canvas.width = 1200;
+    canvas.height = 800;
+    const ratio = Math.max(
+      canvas.width / media.videoWidth,
+      canvas.height / media.videoHeight,
+    );
+    canvas
+      .getContext("2d")!
+      .drawImage(
+        media,
+        (canvas.width - media.videoWidth * ratio) / 2,
+        (canvas.height - media.videoHeight * ratio) / 2,
+        media.videoWidth * ratio,
+        media.videoHeight * ratio,
+      );
+    return canvas.toDataURL("image/jpeg", 0.9);
+  }
   async function capture(
     includeItem = true,
     transform = placement,
@@ -1505,16 +1544,24 @@ export default function Studio() {
         i.onerror = () => reject(new Error("An image could not be loaded."));
         i.src = src;
       });
-    const useLucyOutput =
+    const lockedLucyImage =
+      includeItem && preferLucyOutput && lockedLucyFrameUrl
+        ? await load(lockedLucyFrameUrl)
+        : null;
+    const useLiveLucyOutput =
       includeItem &&
       preferLucyOutput &&
+      !lockedLucyImage &&
       lucyActive &&
       !!editedVideo.current?.videoWidth;
-    const bg = useLucyOutput
-      ? editedVideo.current!
-      : source === "camera" && video.current?.videoWidth
-        ? video.current
-        : await load(roomImage);
+    const useLucyOutput = !!lockedLucyImage || useLiveLucyOutput;
+    const bg = lockedLucyImage
+      ? lockedLucyImage
+      : useLiveLucyOutput
+        ? editedVideo.current!
+        : source === "camera" && video.current?.videoWidth
+          ? video.current
+          : await load(roomImage);
     const w = bg instanceof HTMLVideoElement ? bg.videoWidth : bg.width,
       h = bg instanceof HTMLVideoElement ? bg.videoHeight : bg.height;
     const ratio = Math.max(1200 / w, 800 / h);
@@ -1525,9 +1572,8 @@ export default function Studio() {
       w * ratio,
       h * ratio,
     );
-    if (includeItem) {
+    if (includeItem && !useLucyOutput) {
       for (const furniture of items) {
-        if (useLucyOutput && furniture.id === selectedItemId) continue;
         const furniturePlacement =
           furniture.id === selectedItemId ? transform : furniture.placement;
         const iw = 330 * furniturePlacement.scale;
@@ -2024,7 +2070,7 @@ export default function Studio() {
                     ? `live-verdict-frame ${
                         jevRunState === "ready" && evaluation.fit === "green"
                           ? "yes"
-                          : jevRunState === "ready"
+                          : jevRunState === "ready" && evaluation.fit === "red"
                             ? "no"
                             : "checking"
                       }`
@@ -2077,7 +2123,11 @@ export default function Studio() {
                   playsInline
                   className="room-background camera-feed"
                   style={{
-                    visibility: source === "camera" ? "visible" : "hidden",
+                    visibility:
+                      source === "camera" &&
+                      (before || (!lucyActive && !lockedLucyFrameUrl))
+                        ? "visible"
+                        : "hidden",
                   }}
                 />
                 <video
@@ -2087,9 +2137,20 @@ export default function Studio() {
                   playsInline
                   className="room-background"
                   style={{
-                    visibility: lucyActive && !before ? "visible" : "hidden",
+                    visibility:
+                      lucyActive && !before && !lockedLucyFrameUrl
+                        ? "visible"
+                        : "hidden",
                   }}
                 />
+                {lockedLucyFrameUrl && (
+                  <img
+                    className="room-background"
+                    src={lockedLucyFrameUrl}
+                    alt="Locked Lucy furniture layout"
+                    style={{ visibility: before ? "hidden" : "visible" }}
+                  />
+                )}
                 <div className="stage-top">
                   <span className="glass-badge">
                     <span
@@ -2106,11 +2167,13 @@ export default function Studio() {
                   <span className="glass-badge subtle">
                     {lucyPlaceholder
                       ? "Lucy fallback · placeholders"
-                      : lucyActive
-                        ? lucySettling
-                          ? "Hold steady · refining"
-                          : "Lucy live · quick preview"
-                        : "Visual planning"}
+                      : lockedLucyFrameUrl
+                        ? "Lucy layout · locked"
+                        : lucyActive
+                          ? lucySettling
+                            ? "Hold steady · refining"
+                            : "Lucy live · quick preview"
+                          : "Visual planning"}
                   </span>
                 </div>
                 {hasItems &&
@@ -2664,14 +2727,15 @@ export default function Studio() {
                       className="full"
                       onClick={showSuggestion}
                       disabled={
-                        clipLoading || (source === "camera" && !lucyActive)
+                        clipLoading ||
+                        (source === "camera" && !lockedLucyFrameUrl)
                       }
                     >
                       <Video />
                       {clipLoading
                         ? "Generating with H3 Max Turbo…"
-                        : source === "camera" && !lucyActive
-                          ? "Waiting for Lucy output…"
+                        : source === "camera" && !lockedLucyFrameUrl
+                          ? "Waiting for locked Lucy layout…"
                           : "Generate H3 suggestion clip"}
                     </Button>
                   )}
@@ -2683,10 +2747,10 @@ export default function Studio() {
                           className="generated-clip"
                           crossOrigin="anonymous"
                           src={clipUrl}
+                          poster={clipPoster || undefined}
                           controls
                           autoPlay
                           muted
-                          loop
                           playsInline
                         />
                       ) : clipLoading ? (
