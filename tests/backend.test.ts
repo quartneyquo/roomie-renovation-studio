@@ -99,6 +99,11 @@ describe("private room storage", () => {
         referenceId: ids[4],
         placement: { ...initialPlacement, x: 72, scale: 0.76 },
       },
+      {
+        id: "bookshelf",
+        prompt: "White bookshelf",
+        placement: { ...initialPlacement, x: 54, scale: 0.9 },
+      },
     ];
     const id = await alice.mutation(api.rooms.save, {
       requestId: "multi-layout",
@@ -117,10 +122,11 @@ describe("private room storage", () => {
     expect(saved[0].items).toMatchObject([
       { id: "chair", placement: { x: 31, rotation: -8 } },
       { id: "lamp", placement: { x: 72, scale: 0.76 } },
+      { id: "bookshelf", prompt: "White bookshelf" },
     ]);
-    expect(
-      saved[0].items?.every((item) => item.reference.startsWith("http")),
-    ).toBe(true);
+    expect(saved[0].items?.[0].reference).toMatch(/^http/);
+    expect(saved[0].items?.[1].reference).toMatch(/^http/);
+    expect(saved[0].items?.[2].reference).toBeUndefined();
     await expect(
       alice.mutation(api.rooms.save, {
         requestId: "too-many-items",

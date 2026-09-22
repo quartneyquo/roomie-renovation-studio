@@ -170,7 +170,7 @@ export default function Studio() {
     [roomImage, setRoomImage] = useState("/room-demo.png"),
     [cameraState, setCameraState] = useState("Opening camera…");
   const [prompt, setPrompt] = useState(""),
-    [reference, setReference] = useState("/chair.png"),
+    [reference, setReference] = useState(""),
     [placed, setPlaced] = useState(false),
     [placement, setPlacement] = useState<Placement>(initialPlacement),
     [revision, setRevision] = useState(0),
@@ -993,7 +993,7 @@ export default function Studio() {
     if (item.id === selectedItemId && !addingItem) return;
     setSelectedItemId(item.id);
     setPrompt(item.prompt);
-    setReference(item.reference);
+    setReference(item.reference ?? "");
     setPlacement(item.placement);
     setPlaced(true);
     setAddingItem(false);
@@ -1010,7 +1010,7 @@ export default function Studio() {
     setSelectedItemId(null);
     setPlaced(false);
     setPrompt("");
-    setReference("/chair.png");
+    setReference("");
     setPlacement(initialPlacement);
     setLiveEvaluation(null);
     clearGeneratedSuggestion();
@@ -1024,7 +1024,7 @@ export default function Studio() {
     setPlaced(!!next);
     setAddingItem(false);
     setPrompt(next?.prompt ?? "");
-    setReference(next?.reference ?? "/chair.png");
+    setReference(next?.reference ?? "");
     setPlacement(next?.placement ?? initialPlacement);
     setLiveEvaluation(null);
     setRevision((n) => n + 1);
@@ -1191,7 +1191,7 @@ export default function Studio() {
     const item: FurnitureItem = {
       id: isNew ? crypto.randomUUID() : selectedItemId!,
       prompt: prompt.trim(),
-      reference,
+      ...(reference ? { reference } : {}),
       placement: nextPlacement,
     };
     setItems((current) => {
@@ -1213,9 +1213,9 @@ export default function Studio() {
         ? connections.lucy
           ? "Connecting your camera directly to Decart Lucy."
           : "Lucy is not connected. Check the Decart credential."
-        : reference === "/chair.png"
-          ? "Example chair placed. Upload a reference to try your own item."
-          : "Reference placed. Drag it to explore your layout.",
+        : reference
+          ? "Your exact reference is ready to position."
+          : `“${prompt.trim()}” is ready for Lucy to generate.`,
     );
   }
   async function capture(
@@ -1258,6 +1258,7 @@ export default function Studio() {
     if (includeItem) {
       for (const furniture of items) {
         if (useLucyOutput && furniture.id === selectedItemId) continue;
+        if (!furniture.reference) continue;
         const item = await load(furniture.reference);
         const furniturePlacement =
           furniture.id === selectedItemId ? transform : furniture.placement;
@@ -1347,15 +1348,17 @@ export default function Studio() {
       await syncScene();
       const [itemReferenceIds, roomImageId, screenshotId] = await Promise.all([
         Promise.all(
-          items.map((item) => uploadImage(cloud.client!, item.reference)),
+          items.map((item) =>
+            item.reference
+              ? uploadImage(cloud.client!, item.reference)
+              : Promise.resolve(undefined),
+          ),
         ),
         uploadImage(cloud.client, bg),
         uploadImage(cloud.client, screenshot),
       ]);
       const activeIndex = items.findIndex((item) => item.id === selectedItemId);
       const referenceId = itemReferenceIds[activeIndex >= 0 ? activeIndex : 0];
-      if (!referenceId)
-        throw new Error("Select a furniture piece before saving this room.");
       if (latestRevision.current !== revision || sceneKey.current !== view)
         throw new Error("Room changed while saving. Please save again.");
       return cloud.client.mutation(api.rooms.save, {
@@ -1366,7 +1369,7 @@ export default function Studio() {
         source: source === "camera" ? "upload" : source,
         revision,
         evaluation,
-        referenceId,
+        ...(referenceId ? { referenceId } : {}),
         roomImageId,
         screenshotId,
         sceneKey: view,
@@ -1374,7 +1377,9 @@ export default function Studio() {
           id: item.id,
           prompt: item.prompt,
           placement: item.placement,
-          referenceId: itemReferenceIds[index],
+          ...(itemReferenceIds[index]
+            ? { referenceId: itemReferenceIds[index] }
+            : {}),
         })),
       });
     }
@@ -1560,7 +1565,7 @@ export default function Studio() {
           {
             id: crypto.randomUUID(),
             prompt: room.prompt,
-            reference: room.reference,
+            ...(room.reference ? { reference: room.reference } : {}),
             placement: { ...room.placement },
           },
         ];
@@ -1569,7 +1574,7 @@ export default function Studio() {
     setSelectedItemId(active.id);
     setPlacement(active.placement);
     setPrompt(active.prompt);
-    setReference(active.reference);
+    setReference(active.reference ?? "");
     setPlaced(true);
     setAddingItem(false);
     setLiveEvaluation(null);
@@ -1870,11 +1875,18 @@ export default function Studio() {
                           }
                         }}
                       >
-                        <img
-                          src={item.reference}
-                          alt={item.prompt}
-                          draggable={false}
-                        />
+                        {item.reference ? (
+                          <img
+                            src={item.reference}
+                            alt={item.prompt}
+                            draggable={false}
+                          />
+                        ) : generatedByLucy ? null : (
+                          <span className="text-item-target">
+                            <Sparkles size={15} />
+                            <span>{item.prompt}</span>
+                          </span>
+                        )}
                         {selected && (
                           <>
                             <span className="item-handle tl" />
@@ -2090,9 +2102,9 @@ export default function Studio() {
                 >
                   <ImagePlus size={18} />
                   <span>
-                    {reference.startsWith("data:")
+                    {reference
                       ? "Reference added · change image"
-                      : "Add a reference image"}
+                      : "Add an optional reference image"}
                   </span>
                   <Plus size={15} />
                 </button>
@@ -2118,11 +2130,11 @@ export default function Studio() {
                       : "Lucy is generating your live view. Jev is checking whether the requested item appears."
                     : source === "camera"
                       ? connections.lucy
-                        ? "Your camera remains unchanged until Decart Lucy returns its generated stream."
+                        ? "Lucy uses your exact description. Add a reference only when you want a specific look."
                         : "Connect Decart to generate furniture in the live camera view."
-                      : reference === "/chair.png"
-                        ? "Preview uses an example chair. Add your own image to swap it."
-                        : "Your image becomes an editable reference in the room."}
+                      : reference
+                        ? "Your uploaded image is the reference for this exact piece."
+                        : "Your description stays attached to this piece. Add a reference for a direct image preview."}
                 </p>
                 {source === "camera" && placed && lucyState === "failed" && (
                   <div className="lucy-retry" role="alert">
@@ -2150,7 +2162,13 @@ export default function Studio() {
                         aria-pressed={item.id === selectedItemId}
                         onClick={() => selectItem(item)}
                       >
-                        <img src={item.reference} alt="" />
+                        {item.reference ? (
+                          <img src={item.reference} alt="" />
+                        ) : (
+                          <span className="layout-piece-text-icon">
+                            <Sparkles size={16} />
+                          </span>
+                        )}
                         <span>{item.prompt}</span>
                         <small>{index + 1}</small>
                       </button>

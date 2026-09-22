@@ -73,7 +73,7 @@ export const save = ownerMutation({
     revision: v.number(),
     evaluation,
     items: v.optional(v.array(furnitureItem)),
-    referenceId: v.id("_storage"),
+    referenceId: v.optional(v.id("_storage")),
     roomImageId: v.id("_storage"),
     screenshotId: v.id("_storage"),
     sceneKey: v.optional(v.string()),
@@ -139,10 +139,12 @@ export const save = ownerMutation({
         "Please delete a room before saving another (50 maximum).",
       );
     const assetIds = [
-      a.referenceId,
+      ...(a.referenceId ? [a.referenceId] : []),
       a.roomImageId,
       a.screenshotId,
-      ...(a.items?.map((item) => item.referenceId) || []),
+      ...(a.items?.flatMap((item) =>
+        item.referenceId ? [item.referenceId] : [],
+      ) || []),
     ].filter((id, index, all) => all.indexOf(id) === index);
     for (const id of assetIds) {
       const file = await asset(ctx, ctx.ownerId, id);
@@ -183,7 +185,7 @@ export const save = ownerMutation({
 const savedFurnitureItem = v.object({
   id: v.string(),
   prompt: v.string(),
-  reference: v.string(),
+  reference: v.optional(v.string()),
   placement,
 });
 const savedView = v.object({
@@ -195,7 +197,7 @@ const savedView = v.object({
   revision: v.number(),
   evaluation,
   items: v.optional(v.array(savedFurnitureItem)),
-  reference: v.string(),
+  reference: v.optional(v.string()),
   roomImage: v.string(),
   screenshot: v.string(),
   createdAt: v.number(),
@@ -226,14 +228,22 @@ export const list = ownerQuery({
                   id: item.id,
                   prompt: item.prompt,
                   placement: item.placement,
-                  reference: (await ctx.storage.getUrl(item.referenceId))!,
+                  ...(item.referenceId
+                    ? {
+                        reference: (await ctx.storage.getUrl(
+                          item.referenceId,
+                        ))!,
+                      }
+                    : {}),
                 })),
               ),
             }
           : {}),
         ...(r.sceneState ? { sceneState: r.sceneState } : {}),
         createdAt: r._creationTime,
-        reference: (await ctx.storage.getUrl(r.referenceId))!,
+        ...(r.referenceId
+          ? { reference: (await ctx.storage.getUrl(r.referenceId))! }
+          : {}),
         roomImage: (await ctx.storage.getUrl(r.roomImageId))!,
         screenshot: (await ctx.storage.getUrl(r.screenshotId))!,
       })),
@@ -248,10 +258,12 @@ export const remove = ownerMutation({
     if (!room || room.ownerId !== ctx.ownerId)
       throw new ConvexError("Room not found.");
     const storageIds = [
-      room.referenceId,
+      ...(room.referenceId ? [room.referenceId] : []),
       room.roomImageId,
       room.screenshotId,
-      ...(room.items?.map((item) => item.referenceId) || []),
+      ...(room.items?.flatMap((item) =>
+        item.referenceId ? [item.referenceId] : [],
+      ) || []),
     ].filter((id, index, all) => all.indexOf(id) === index);
     for (const storageId of storageIds) {
       const row = await asset(ctx, ctx.ownerId, storageId);

@@ -8,7 +8,7 @@ export type RoomSource = "demo" | "camera" | "upload";
 export type FurnitureItem = {
   id: string;
   prompt: string;
-  reference: string;
+  reference?: string;
   placement: Placement;
 };
 export type Evaluation = {
@@ -81,7 +81,7 @@ export type SavedRoom = {
   createdAt: number;
   placement: Placement;
   prompt: string;
-  reference: string;
+  reference?: string;
   roomImage: string;
   screenshot: string;
   source: RoomSource;

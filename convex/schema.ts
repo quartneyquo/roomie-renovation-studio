@@ -10,7 +10,7 @@ export const placement = v.object({
 export const furnitureItem = v.object({
   id: v.string(),
   prompt: v.string(),
-  referenceId: v.id("_storage"),
+  referenceId: v.optional(v.id("_storage")),
   placement,
 });
 export const sceneFurnitureItem = v.object({
@@ -97,7 +97,7 @@ export default defineSchema({
     revision: v.number(),
     evaluation,
     items: v.optional(v.array(furnitureItem)),
-    referenceId: v.id("_storage"),
+    referenceId: v.optional(v.id("_storage")),
     roomImageId: v.id("_storage"),
     screenshotId: v.id("_storage"),
     sceneState: v.optional(v.string()),
