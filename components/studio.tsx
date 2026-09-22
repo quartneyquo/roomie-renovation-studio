@@ -99,6 +99,43 @@ type ScanStage =
   | "analyzing"
   | "ready"
   | "failed";
+
+function wavBlob(chunks: Float32Array[], sampleRate: number) {
+  const sampleCount = chunks.reduce((total, chunk) => total + chunk.length, 0);
+  const buffer = new ArrayBuffer(44 + sampleCount * 2);
+  const view = new DataView(buffer);
+  const write = (offset: number, value: string) => {
+    for (let index = 0; index < value.length; index++)
+      view.setUint8(offset + index, value.charCodeAt(index));
+  };
+  write(0, "RIFF");
+  view.setUint32(4, 36 + sampleCount * 2, true);
+  write(8, "WAVE");
+  write(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  write(36, "data");
+  view.setUint32(40, sampleCount * 2, true);
+  let offset = 44;
+  for (const chunk of chunks) {
+    for (const value of chunk) {
+      const sample = Math.max(-1, Math.min(1, value));
+      view.setInt16(
+        offset,
+        sample < 0 ? sample * 0x8000 : sample * 0x7fff,
+        true,
+      );
+      offset += 2;
+    }
+  }
+  return new Blob([buffer], { type: "audio/wav" });
+}
+
 export default function Studio() {
   const cloud = useCloud();
   const [connections, setConnections] = useState<Connections>({
@@ -150,8 +187,13 @@ export default function Studio() {
   const scanChunks = useRef<Blob[]>([]);
   const scanTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const scanStartedAt = useRef(0);
-  const voiceRecorder = useRef<MediaRecorder | null>(null);
-  const voiceChunks = useRef<Blob[]>([]);
+  const voiceCapture = useRef<{
+    context: AudioContext;
+    source: MediaStreamAudioSourceNode;
+    processor: ScriptProcessorNode;
+    stream: MediaStream;
+    chunks: Float32Array[];
+  } | null>(null);
   const voiceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [voiceState, setVoiceState] = useState<
     "idle" | "listening" | "transcribing" | "failed"
@@ -385,11 +427,12 @@ export default function Studio() {
       lucy.current?.close();
       stopScanCamera();
       if (voiceTimer.current) clearTimeout(voiceTimer.current);
-      if (voiceRecorder.current?.state === "recording")
-        voiceRecorder.current.stop();
-      voiceRecorder.current?.stream
-        .getTracks()
-        .forEach((track) => track.stop());
+      const capture = voiceCapture.current;
+      capture?.source.disconnect();
+      capture?.processor.disconnect();
+      capture?.stream.getTracks().forEach((track) => track.stop());
+      void capture?.context.close();
+      voiceCapture.current = null;
       for (const cancel of activeJobs.current.values()) cancel();
     };
   }, []);
@@ -1224,9 +1267,7 @@ export default function Studio() {
 
   async function recordFurnitureRequest() {
     if (voiceState === "listening") {
-      if (voiceTimer.current) clearTimeout(voiceTimer.current);
-      voiceTimer.current = null;
-      voiceRecorder.current?.stop();
+      await finishVoiceRecording();
       return;
     }
     if (voiceState === "transcribing") return;
@@ -1238,7 +1279,7 @@ export default function Studio() {
       toast.error("GMI speech recognition is not connected.");
       return;
     }
-    if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
+    if (!navigator.mediaDevices?.getUserMedia || !window.AudioContext) {
       toast.error("Voice input is not available in this browser.");
       return;
     }
@@ -1252,67 +1293,79 @@ export default function Studio() {
         },
         video: false,
       });
-      const mimeType = [
-        "audio/webm;codecs=opus",
-        "audio/mp4",
-        "audio/webm",
-      ].find((type) => MediaRecorder.isTypeSupported(type));
-      const recorder = new MediaRecorder(
-        audioStream,
-        mimeType ? { mimeType } : undefined,
-      );
-      voiceRecorder.current = recorder;
-      voiceChunks.current = [];
-      recorder.ondataavailable = (event) => {
-        if (event.data.size) voiceChunks.current.push(event.data);
+      const context = new AudioContext();
+      await context.resume();
+      const sourceNode = context.createMediaStreamSource(audioStream);
+      const processor = context.createScriptProcessor(4096, 1, 1);
+      const chunks: Float32Array[] = [];
+      processor.onaudioprocess = (event) => {
+        chunks.push(new Float32Array(event.inputBuffer.getChannelData(0)));
       };
-      recorder.onstop = async () => {
-        if (voiceTimer.current) clearTimeout(voiceTimer.current);
-        voiceTimer.current = null;
-        audioStream.getTracks().forEach((track) => track.stop());
-        const blob = new Blob(voiceChunks.current, {
-          type: recorder.mimeType || "audio/webm",
-        });
-        voiceChunks.current = [];
-        if (!blob.size) {
-          setVoiceState("failed");
-          setVoiceError("I couldn’t hear anything. Tap and try again.");
-          return;
-        }
-        setVoiceState("transcribing");
-        try {
-          const audio = await new Promise<string>((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve(String(reader.result));
-            reader.onerror = () =>
-              reject(new Error("Audio could not be read."));
-            reader.readAsDataURL(blob);
-          });
-          const result = await cloud.client!.action(api.providers.transcribe, {
-            audio,
-            mimeType: blob.type || "audio/webm",
-          });
-          setVoiceState("idle");
-          setPrompt(result.text);
-          await place(result.text);
-        } catch (error) {
-          const message =
-            error instanceof Error
-              ? error.message
-              : "Voice recognition failed. Try again.";
-          setVoiceState("failed");
-          setVoiceError(message);
-          toast.error(message);
-        }
+      sourceNode.connect(processor);
+      processor.connect(context.destination);
+      voiceCapture.current = {
+        context,
+        source: sourceNode,
+        processor,
+        stream: audioStream,
+        chunks,
       };
-      recorder.start();
       setVoiceState("listening");
       voiceTimer.current = setTimeout(() => {
-        if (recorder.state === "recording") recorder.stop();
+        void finishVoiceRecording();
       }, 8_000);
     } catch {
       setVoiceState("failed");
       setVoiceError("Microphone access is needed to describe furniture.");
+    }
+  }
+
+  async function finishVoiceRecording() {
+    if (voiceTimer.current) clearTimeout(voiceTimer.current);
+    voiceTimer.current = null;
+    const capture = voiceCapture.current;
+    if (!capture) return;
+    voiceCapture.current = null;
+    capture.processor.onaudioprocess = null;
+    capture.source.disconnect();
+    capture.processor.disconnect();
+    capture.stream.getTracks().forEach((track) => track.stop());
+    await capture.context.close();
+    let energy = 0;
+    let sampleCount = 0;
+    for (const chunk of capture.chunks) {
+      sampleCount += chunk.length;
+      for (const value of chunk) energy += value * value;
+    }
+    if (!sampleCount || Math.sqrt(energy / sampleCount) < 0.003) {
+      setVoiceState("failed");
+      setVoiceError("I couldn’t hear anything. Tap and try again.");
+      return;
+    }
+    const blob = wavBlob(capture.chunks, capture.context.sampleRate);
+    setVoiceState("transcribing");
+    try {
+      const audio = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = () => reject(new Error("Audio could not be read."));
+        reader.readAsDataURL(blob);
+      });
+      const result = await cloud.client!.action(api.providers.transcribe, {
+        audio,
+        mimeType: "audio/wav",
+      });
+      setVoiceState("idle");
+      setPrompt(result.text);
+      await place(result.text);
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Voice recognition failed. Try again.";
+      setVoiceState("failed");
+      setVoiceError(message);
+      toast.error(message);
     }
   }
 
