@@ -49,6 +49,33 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 describe("versioned room understanding", () => {
+  it("accepts optional scan performance data and keeps legacy snapshots valid", () => {
+    const legacy = parseSnapshot(snapshot, "imported", 1);
+    expect(legacy.performance).toBeUndefined();
+
+    const timed = parseSnapshot(
+      JSON.stringify({
+        ...JSON.parse(snapshot),
+        performance: {
+          frameCount: 30,
+          pointCount: 120000,
+          reconstructionSeconds: 41.25,
+          spatialLmSeconds: 8.5,
+          totalSeconds: 50.1,
+        },
+      }),
+      "modal",
+      2,
+    );
+    expect(timed.performance).toEqual({
+      frameCount: 30,
+      pointCount: 120000,
+      reconstructionSeconds: 41.25,
+      spatialLmSeconds: 8.5,
+      totalSeconds: 50.1,
+    });
+  });
+
   it("transcribes a short furniture request through GMI", async () => {
     const { alice } = await setup();
     vi.stubEnv("GMI_API_KEY", "test-gmi-key");
@@ -64,9 +91,7 @@ describe("versioned room understanding", () => {
         submitted = JSON.parse(String(options.body));
         return new Response(
           JSON.stringify({
-            choices: [
-              { message: { content: "a tall white bookshelf." } },
-            ],
+            choices: [{ message: { content: "a tall white bookshelf." } }],
           }),
           {
             status: 200,
@@ -103,11 +128,12 @@ describe("versioned room understanding", () => {
     vi.stubEnv("GMI_API_KEY", "test-gmi-key");
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () =>
-        new Response(
-          JSON.stringify({ choices: [{ message: { content: "EMPTY" } }] }),
-          { status: 200 },
-        ),
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({ choices: [{ message: { content: "EMPTY" } }] }),
+            { status: 200 },
+          ),
       ),
     );
     await expect(
@@ -137,7 +163,9 @@ describe("versioned room understanding", () => {
     expect(prompt).toContain("floor lamp [ACTIVE ITEM]");
     expect(prompt).toContain("center 78 percent from the left");
     expect(prompt).toContain("rotation 15 degrees");
-    expect(prompt).toContain("keeping every other listed furniture item visible");
+    expect(prompt).toContain(
+      "keeping every other listed furniture item visible",
+    );
     expect(prompt).toContain("Do not remove, replace, duplicate, or invent");
   });
   it("normalizes unverified imports and never approves physical fit", () => {

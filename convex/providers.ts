@@ -257,10 +257,7 @@ export const transcribe = action({
       .replace(/^['"]|['"]$/g, "")
       .replace(/[.!?]+$/g, "")
       .trim();
-    if (
-      !text ||
-      /^(a|an|the|empty|no speech|inaudible|unclear)$/i.test(text)
-    )
+    if (!text || /^(a|an|the|empty|no speech|inaudible|unclear)$/i.test(text))
       throw new Error("I couldn’t hear a furniture request. Try again.");
     return { text: text.slice(0, 1000), model };
   },
@@ -1011,7 +1008,7 @@ export const pollSpatial = internalAction({
       if (Date.now() - job.createdAt > (isVideo ? 1_200_000 : 600_000))
         throw new Error(
           isVideo
-            ? "Room reconstruction timed out. Try a slower 15-second walkthrough."
+            ? "Room reconstruction timed out. Try a slower 30-second walkthrough."
             : "Room scan timed out. Try a smaller point cloud.",
         );
       const output = z

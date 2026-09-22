@@ -99,8 +99,8 @@ type ScanStage =
   | "analyzing"
   | "ready"
   | "failed";
-const scanMinimumSeconds = 10;
-const scanMaximumSeconds = 15;
+const scanMinimumSeconds = 30;
+const scanMaximumSeconds = 30;
 
 function wavBlob(chunks: Float32Array[], sampleRate: number) {
   const sampleCount = chunks.reduce((total, chunk) => total + chunk.length, 0);
@@ -767,14 +767,6 @@ export default function Studio() {
       setScanStage("failed");
     }
   }
-  function finishRoomRecording() {
-    if (
-      scanSeconds < scanMinimumSeconds ||
-      scanRecorder.current?.state !== "recording"
-    )
-      return;
-    scanRecorder.current.stop();
-  }
   async function runRoomScanJob(
     scanId: Id<"roomScans">,
     videoId: Id<"_storage">,
@@ -838,7 +830,12 @@ export default function Studio() {
             setLiveEvaluation(null);
             setRevision((value) => value + 1);
             setScanStage("ready");
-            setSceneStatus("Room scan ready · Jev is reviewing visual fit");
+            const elapsed = snapshot.performance?.totalSeconds;
+            setSceneStatus(
+              elapsed
+                ? `Room scan ready in ${Math.round(elapsed)} seconds · Jev is reviewing visual fit`
+                : "Room scan ready · Jev is reviewing visual fit",
+            );
             finish();
             resolve();
           } else if (job.status === "failed" || job.status === "cancelled") {
@@ -948,10 +945,7 @@ export default function Studio() {
         : [];
     const activeItem =
       layout.find((item) => item.id === requestedActiveItemId) ?? layout.at(-1);
-    const instruction = lucyLayoutPrompt(
-      layout,
-      activeItem?.id ?? undefined,
-    );
+    const instruction = lucyLayoutPrompt(layout, activeItem?.id ?? undefined);
     const activeReference = activeItem?.reference || "";
     if (lucyActive) {
       lucy.current?.update(
@@ -2856,7 +2850,7 @@ export default function Studio() {
                 <div className="scan-guide">
                   <div className="scan-illustration">
                     <Camera size={34} />
-                    <span>10–15 sec</span>
+                    <span>30 sec</span>
                   </div>
                   <h3>Walk slowly around the whole living room.</h3>
                   <ul>
@@ -2901,7 +2895,7 @@ export default function Studio() {
                     <>
                       <p>
                         Start near a doorway, then pan and walk slowly around
-                        the room. Keep recording for at least 10 seconds.
+                        the room. Recording stops automatically at 30 seconds.
                       </p>
                       <Button className="full" onClick={startRoomRecording}>
                         <Video /> Start walkthrough
@@ -2917,17 +2911,8 @@ export default function Studio() {
                         />
                       </div>
                       <p>
-                        {scanSeconds < scanMinimumSeconds
-                          ? `${scanMinimumSeconds - scanSeconds} seconds until you can finish`
-                          : "Enough coverage captured. Continue toward 15 seconds for more detail."}
+                        {`${Math.max(0, scanMinimumSeconds - scanSeconds)} seconds remaining. Keep moving slowly; recording stops automatically.`}
                       </p>
-                      <Button
-                        className="full"
-                        onClick={finishRoomRecording}
-                        disabled={scanSeconds < scanMinimumSeconds}
-                      >
-                        <Check /> Finish scan
-                      </Button>
                     </>
                   )}
                 </div>
@@ -2972,6 +2957,13 @@ export default function Studio() {
                       ? roomSummary(roomSnapshot)
                       : "The compact room snapshot is saved in Convex."}
                   </p>
+                  {roomSnapshot?.performance?.totalSeconds !== undefined && (
+                    <p className="scan-performance">
+                      Ready in{" "}
+                      {Math.round(roomSnapshot.performance.totalSeconds)}{" "}
+                      seconds
+                    </p>
+                  )}
                   <div className="visual-estimate-note">
                     Jev guidance is a visual estimate until metric calibration
                     and camera-to-scan alignment are available.
@@ -3181,7 +3173,7 @@ export default function Studio() {
                 <Camera /> Scan this room
               </Button>
               <small>
-                Record a 10–15 second walkthrough. The video is uploaded to
+                Record a fixed 30-second walkthrough. The video is uploaded to
                 Convex and sent to Modal for reconstruction and SpatialLM
                 analysis.
               </small>

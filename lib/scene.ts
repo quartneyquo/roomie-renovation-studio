@@ -13,6 +13,13 @@ export const placementSchema = z.object({
   rotation: z.number().finite().min(-180).max(180),
 });
 const entities = z.array(z.record(z.unknown())).max(100);
+const performanceSchema = z.object({
+  frameCount: z.number().int().nonnegative().max(30),
+  pointCount: z.number().int().nonnegative(),
+  reconstructionSeconds: z.number().finite().nonnegative(),
+  spatialLmSeconds: z.number().finite().nonnegative(),
+  totalSeconds: z.number().finite().nonnegative(),
+});
 export const snapshotSchema = z.object({
   model: z.string().min(1).max(150),
   geometry: z.object({
@@ -21,6 +28,7 @@ export const snapshotSchema = z.object({
     windows: entities,
     bboxes: entities,
   }),
+  performance: performanceSchema.optional(),
 });
 export type SpatialSnapshot = z.infer<typeof snapshotSchema> & {
   provenance: "modal" | "imported";
