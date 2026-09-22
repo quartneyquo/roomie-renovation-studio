@@ -690,6 +690,13 @@ a:focus-visible {
 .placed-item.selected.uncertain {
   border-color: #ba8c48;
 }
+.placed-item.lucy-placeholder-item {
+  border-color: #ffffffb8;
+  border-style: dashed;
+}
+.placed-item.lucy-placeholder-item.selected {
+  border-color: #8b3650;
+}
 .placed-item img {
   width: 100%;
   height: auto;
@@ -782,6 +789,27 @@ a:focus-visible {
   background: #fff4f5;
   color: #8e3f4d;
   font-size: 12px;
+}
+.lucy-placeholder-note {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 12px;
+  border: 1px solid #d9c4a9;
+  border-radius: 8px;
+  background: #fff9ed;
+  color: #755f4d;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.lucy-placeholder-note span,
+.lucy-placeholder-note strong {
+  display: block;
+}
+.lucy-placeholder-note strong {
+  color: #78263b;
+  margin-bottom: 2px;
 }
 .item-handle {
   position: absolute;

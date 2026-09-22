@@ -162,8 +162,9 @@ export default function Studio() {
     [clipError, setClipError] = useState<string | null>(null),
     [lucyActive, setLucyActive] = useState(false),
     [lucyState, setLucyState] = useState<
-      "idle" | "connecting" | "active" | "failed"
+      "idle" | "connecting" | "active" | "placeholder" | "failed"
     >("idle"),
+    [preferLucyPlaceholders, setPreferLucyPlaceholders] = useState(true),
     [lucyError, setLucyError] = useState(""),
     [emailSnapshot, setEmailSnapshot] = useState<{
       screenshot: string;
@@ -235,6 +236,8 @@ export default function Studio() {
   const [addingItem, setAddingItem] = useState(false);
   const hasItems = items.length > 0;
   const selectedItem = items.find((item) => item.id === selectedItemId) ?? null;
+  const lucyPlaceholder = source === "camera" && lucyState === "placeholder";
+  const lucyVisualReady = lucyActive || lucyPlaceholder;
   const [busy, setBusy] = useState(false),
     [localSaved, setSaved] = useState<SavedRoom[]>([]),
     [saveName, setSaveName] = useState("A warmer living room"),
@@ -323,7 +326,7 @@ export default function Studio() {
       const stateTimer = setTimeout(() => setJevRunState("idle"), 0);
       return () => clearTimeout(stateTimer);
     }
-    if (source === "camera" && !lucyActive) {
+    if (source === "camera" && !lucyVisualReady) {
       const stateTimer = setTimeout(() => {
         setJevRunState("checking");
         setSceneStatus("Waiting for Lucy’s generated view…");
@@ -373,7 +376,7 @@ export default function Studio() {
                       sceneKey: view,
                       liveFrameId,
                       lucyFrameId,
-                      lucyOutputObserved: true,
+                      lucyOutputObserved: lucyActive,
                     },
                     current,
                   ),
@@ -406,7 +409,15 @@ export default function Studio() {
       clearTimeout(timer);
       activeJobs.current.get("jev")?.();
     };
-  }, [revision, placed, source, lucyActive, cloud.ready, connections.jev]);
+  }, [
+    revision,
+    placed,
+    source,
+    lucyActive,
+    lucyVisualReady,
+    cloud.ready,
+    connections.jev,
+  ]);
   useEffect(() => {
     if (!placed || !cloud.ready || !connections.research) return;
     let valid = true;
@@ -930,6 +941,7 @@ export default function Studio() {
   async function startLive(
     requestedItems: FurnitureItem[] = items,
     requestedActiveItemId: string | null = selectedItemId,
+    forceProvider = false,
   ) {
     const layout = requestedItems.length
       ? requestedItems
@@ -951,6 +963,23 @@ export default function Studio() {
       lucy.current?.update(
         instruction,
         activeReference.startsWith("data:") ? activeReference : undefined,
+      );
+      return;
+    }
+    const activatePlaceholder = (reason = "") => {
+      lucy.current?.close();
+      lucy.current = null;
+      setLucyActive(false);
+      setLucyState("placeholder");
+      setPreferLucyPlaceholders(true);
+      setLucyError(reason);
+      setJobMessage("");
+    };
+    if ((preferLucyPlaceholders || !connections.lucy) && !forceProvider) {
+      activatePlaceholder(
+        connections.lucy
+          ? "Lucy demo mode is on. No Decart credits are being used."
+          : "Lucy is not connected, so Roomie is showing demo placeholders.",
       );
       return;
     }
@@ -1001,6 +1030,7 @@ export default function Studio() {
           }
           setLucyActive(true);
           setLucyState("active");
+          setPreferLucyPlaceholders(false);
           setLucyError("");
           setJobMessage("");
         },
@@ -1046,14 +1076,13 @@ export default function Studio() {
         /stale connect attempt/i.test(message)
       )
         return;
-      toast.error(message);
       pendingSession?.then((session) => session.close()).catch(() => {});
       if (lucyAttempt.current === attempt) lucyAttempt.current++;
       lucyConnecting.current = false;
-      setLucyActive(false);
-      setLucyState("failed");
-      setLucyError(message);
-      setJobMessage("");
+      activatePlaceholder(message);
+      toast.info(
+        "Lucy is unavailable, so Roomie switched to demo placeholders.",
+      );
     } finally {
       if (connectTimer) clearTimeout(connectTimer);
       if (lucyAttempt.current === attempt) lucyConnecting.current = false;
@@ -1405,13 +1434,12 @@ export default function Studio() {
     setPlaced(true);
     setBefore(false);
     setBusy(false);
-    if (source === "camera" && connections.lucy)
-      void startLive(nextItems, item.id);
+    if (source === "camera") void startLive(nextItems, item.id);
     toast.success(
       source === "camera"
-        ? connections.lucy
-          ? "Connecting your camera directly to Decart Lucy."
-          : "Lucy is not connected. Check the Decart credential."
+        ? preferLucyPlaceholders || !connections.lucy
+          ? "Lucy demo placeholders are ready in your live camera."
+          : "Connecting your camera directly to Decart Lucy."
         : reference
           ? "Your exact reference is ready to position."
           : `“${description}” is ready for Lucy to generate.`,
@@ -1457,16 +1485,32 @@ export default function Studio() {
     if (includeItem) {
       for (const furniture of items) {
         if (useLucyOutput && furniture.id === selectedItemId) continue;
-        if (!furniture.reference) continue;
-        const item = await load(furniture.reference);
         const furniturePlacement =
           furniture.id === selectedItemId ? transform : furniture.placement;
-        const iw = 330 * furniturePlacement.scale,
-          ih = (iw * item.height) / item.width;
+        const iw = 330 * furniturePlacement.scale;
         ctx.save();
         ctx.translate(furniturePlacement.x * 12, furniturePlacement.y * 8);
         ctx.rotate((furniturePlacement.rotation * Math.PI) / 180);
-        ctx.drawImage(item, -iw / 2, -ih / 2, iw, ih);
+        if (furniture.reference) {
+          const item = await load(furniture.reference);
+          const ih = (iw * item.height) / item.width;
+          ctx.drawImage(item, -iw / 2, -ih / 2, iw, ih);
+        } else if (lucyPlaceholder) {
+          const ih = 112 * furniturePlacement.scale;
+          ctx.fillStyle = "rgba(255, 250, 242, 0.92)";
+          ctx.strokeStyle = "#8b3650";
+          ctx.lineWidth = 4;
+          ctx.setLineDash([12, 8]);
+          ctx.fillRect(-iw / 2, -ih / 2, iw, ih);
+          ctx.strokeRect(-iw / 2, -ih / 2, iw, ih);
+          ctx.setLineDash([]);
+          ctx.fillStyle = "#78263b";
+          ctx.font = `600 ${Math.max(18, 22 * furniturePlacement.scale)}px sans-serif`;
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          const label = furniture.prompt.slice(0, 42);
+          ctx.fillText(label, 0, 0, iw - 28);
+        }
         ctx.restore();
       }
     }
@@ -1805,14 +1849,16 @@ export default function Studio() {
         screenshot = clipPoster;
         label = "H3 Max Turbo target frame";
       } else {
-        if (source === "camera" && !lucyActive)
+        if (source === "camera" && !lucyVisualReady)
           throw new Error(
             "Start the Lucy live view or generate an H3 clip before preparing the email.",
           );
         screenshot = await capture();
         label =
           source === "camera"
-            ? "Lucy live placement frame"
+            ? lucyPlaceholder
+              ? "Lucy demo placeholder frame"
+              : "Lucy live placement frame"
             : "Placement preview";
       }
       setEmailSnapshot({
@@ -2009,19 +2055,25 @@ export default function Studio() {
                         ? "LIVE CAMERA"
                         : "ROOM PHOTO"}
                   </span>
-                  <span className="glass-badge subtle">Visual planning</span>
+                  <span className="glass-badge subtle">
+                    {lucyPlaceholder
+                      ? "Lucy demo · placeholders"
+                      : "Visual planning"}
+                  </span>
                 </div>
                 {hasItems &&
                   !before &&
                   items.map((item) => {
-                    if (source === "camera") return null;
+                    if (source === "camera" && !lucyPlaceholder) return null;
                     const selected = item.id === selectedItemId;
                     return (
                       <button
                         key={item.id}
                         className={`placed-item ${
                           selected ? evaluation.verdict : ""
-                        } ${selected ? "selected" : ""}`}
+                        } ${selected ? "selected" : ""} ${
+                          lucyPlaceholder ? "lucy-placeholder-item" : ""
+                        }`}
                         aria-label={`Select and move ${item.prompt}. Use arrow keys to adjust position.`}
                         aria-pressed={selected}
                         style={{
@@ -2331,14 +2383,37 @@ export default function Studio() {
                       ? jevRunState === "ready"
                         ? "Jev checked the requested item in Lucy’s live output. Visual estimate only."
                         : "Lucy is generating your live view. Jev is checking whether the requested item appears."
-                      : source === "camera"
-                        ? connections.lucy
-                          ? "Lucy uses your exact description. Add a reference only when you want a specific look."
-                          : "Connect Decart to generate furniture in the live camera view."
-                        : reference
-                          ? "Your uploaded image is the reference for this exact piece."
-                          : "Your spoken description stays attached to this piece. Add a reference for a direct image preview."}
+                      : lucyPlaceholder
+                        ? "Demo placeholders use your exact furniture descriptions and positions without spending Decart credits."
+                        : source === "camera"
+                          ? connections.lucy
+                            ? "Lucy uses your exact description. Add a reference only when you want a specific look."
+                            : "Roomie will use demo placeholders until Decart Lucy is connected."
+                          : reference
+                            ? "Your uploaded image is the reference for this exact piece."
+                            : "Your spoken description stays attached to this piece. Add a reference for a direct image preview."}
                 </p>
+                {source === "camera" && placed && lucyPlaceholder && (
+                  <div className="lucy-placeholder-note" role="status">
+                    <span>
+                      <strong>Lucy demo mode</strong>
+                      No Decart credits are being used. These labeled shapes are
+                      placeholders, not generated furniture.
+                    </span>
+                    {connections.lucy && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setPreferLucyPlaceholders(false);
+                          void startLive(items, selectedItemId, true);
+                        }}
+                      >
+                        Try real Lucy
+                      </Button>
+                    )}
+                  </div>
+                )}
                 {source === "camera" && placed && lucyState === "failed" && (
                   <div className="lucy-retry" role="alert">
                     <span>{lucyError || "Lucy could not connect."}</span>
@@ -2450,12 +2525,9 @@ export default function Studio() {
                   </p>
                   <button
                     className="inspiration-chip"
-                    onClick={() => {
-                      setPrompt("A sculptural terracotta accent chair");
-                      setRevision((n) => n + 1);
-                    }}
+                    onClick={() => void place("A white bookshelf")}
                   >
-                    A cozy reading corner <ChevronRight size={16} />
+                    Try a white bookshelf placeholder <ChevronRight size={16} />
                   </button>
                   <div className="mini-note">
                     <Sparkles size={16} />
