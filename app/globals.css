@@ -597,9 +597,6 @@ a:focus-visible {
   pointer-events: none;
   filter: drop-shadow(4px 14px 10px #3b281f30);
 }
-.placed-item.lucy-selected img {
-  opacity: 0;
-}
 .text-item-target {
   display: flex;
   min-height: 72px;

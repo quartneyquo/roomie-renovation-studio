@@ -6,7 +6,9 @@ import { initialPlacement } from "../lib/room";
 import {
   evaluateScene,
   lucyPrompt,
+  normalizeWalls,
   parseSnapshot,
+  roomSummary,
   type SceneState,
 } from "../lib/scene";
 const modules = import.meta.glob("../convex/**/*.ts");
@@ -65,10 +67,36 @@ describe("versioned room understanding", () => {
       },
     };
     expect(evaluateScene(scene).verdict).toBe("uncertain");
-    expect(evaluateScene(scene).explanation).toContain("1 doors");
+    expect(evaluateScene(scene).explanation).toContain("1 door");
     expect(() => parseSnapshot('{"geometry":{}}', "imported", 1)).toThrow();
     expect(() => parseSnapshot("x".repeat(120001), "imported", 1)).toThrow(
       "120 KB",
+    );
+  });
+  it("merges overlapping SpatialLM segments into physical wall runs", () => {
+    const walls = Array.from({ length: 100 }, (_, index) => ({
+      id: index,
+      ax: 0.391,
+      ay: index * 0.05,
+      az: 0.0932,
+      bx: 0.391,
+      by: index * 0.05 + 0.125,
+      bz: 0.0932,
+      height: 2.36,
+      entity_label: "wall",
+    }));
+    const room = parseSnapshot(
+      JSON.stringify({
+        model: "SpatialLM-test-fixture",
+        geometry: { walls, doors: [], windows: [], bboxes: [] },
+      }),
+      "modal",
+      1,
+    );
+    expect(normalizeWalls(walls)).toHaveLength(1);
+    expect(room.geometry.walls).toHaveLength(1);
+    expect(roomSummary(room)).toBe(
+      "1 wall, 0 doors, 0 windows and 0 furniture boxes",
     );
   });
   it("isolates scenes by owner and rejects older or conflicting revisions", async () => {

@@ -1811,21 +1811,14 @@ export default function Studio() {
                 {hasItems &&
                   !before &&
                   items.map((item) => {
+                    if (source === "camera") return null;
                     const selected = item.id === selectedItemId;
-                    const generatedByLucy =
-                      source === "camera" &&
-                      lucyActive &&
-                      selected &&
-                      jevRunState === "ready" &&
-                      evaluation.fit === "green";
                     return (
                       <button
                         key={item.id}
                         className={`placed-item ${
                           selected ? evaluation.verdict : ""
-                        } ${selected ? "selected" : ""} ${
-                          generatedByLucy ? "lucy-selected" : ""
-                        }`}
+                        } ${selected ? "selected" : ""}`}
                         aria-label={`Select and move ${item.prompt}. Use arrow keys to adjust position.`}
                         aria-pressed={selected}
                         style={{
@@ -1881,7 +1874,7 @@ export default function Studio() {
                             alt={item.prompt}
                             draggable={false}
                           />
-                        ) : generatedByLucy ? null : (
+                        ) : (
                           <span className="text-item-target">
                             <Sparkles size={15} />
                             <span>{item.prompt}</span>
