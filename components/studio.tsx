@@ -168,7 +168,7 @@ export default function Studio() {
   const [source, setSource] = useState<RoomSource>("demo"),
     [roomImage, setRoomImage] = useState("/room-demo.png"),
     [cameraState, setCameraState] = useState("Opening camera…");
-  const [prompt, setPrompt] = useState("A sculptural terracotta accent chair"),
+  const [prompt, setPrompt] = useState(""),
     [reference, setReference] = useState("/chair.png"),
     [placed, setPlaced] = useState(false),
     [placement, setPlacement] = useState<Placement>(initialPlacement),
@@ -251,6 +251,13 @@ export default function Studio() {
       const stateTimer = setTimeout(() => setJevRunState("idle"), 0);
       return () => clearTimeout(stateTimer);
     }
+    if (source === "camera" && !lucyActive) {
+      const stateTimer = setTimeout(() => {
+        setJevRunState("checking");
+        setSceneStatus("Waiting for Lucy’s generated view…");
+      }, 0);
+      return () => clearTimeout(stateTimer);
+    }
     if (!connections.jev) {
       const stateTimer = setTimeout(() => setJevRunState("fallback"), 0);
       return () => clearTimeout(stateTimer);
@@ -280,10 +287,24 @@ export default function Studio() {
           );
           if (!placed || !connections.jev) return null;
           return source === "camera" && video.current?.videoWidth
-            ? capture(false)
-                .then((frame) => uploadImage(cloud.client!, frame))
-                .then((liveFrameId) =>
-                  runJob("jev", { sceneKey: view, liveFrameId }, current),
+            ? Promise.all([capture(false), capture(true)])
+                .then(([originalFrame, lucyFrame]) =>
+                  Promise.all([
+                    uploadImage(cloud.client!, originalFrame),
+                    uploadImage(cloud.client!, lucyFrame),
+                  ]),
+                )
+                .then(([liveFrameId, lucyFrameId]) =>
+                  runJob(
+                    "jev",
+                    {
+                      sceneKey: view,
+                      liveFrameId,
+                      lucyFrameId,
+                      lucyOutputObserved: true,
+                    },
+                    current,
+                  ),
                 )
             : runJob("jev", { sceneKey: view }, current);
         })
@@ -313,7 +334,7 @@ export default function Studio() {
       clearTimeout(timer);
       activeJobs.current.get("jev")?.();
     };
-  }, [revision, placed, source, cloud.ready, connections.jev]);
+  }, [revision, placed, source, lucyActive, cloud.ready, connections.jev]);
   useEffect(() => {
     if (!placed || !cloud.ready || !connections.research) return;
     let valid = true;
@@ -1932,7 +1953,7 @@ export default function Studio() {
                     className="inspiration-chip"
                     onClick={() => {
                       setPrompt("A sculptural terracotta accent chair");
-                      void place();
+                      setRevision((n) => n + 1);
                     }}
                   >
                     A cozy reading corner <ChevronRight size={16} />
