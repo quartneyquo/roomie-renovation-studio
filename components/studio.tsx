@@ -834,6 +834,7 @@ export default function Studio() {
     let providerMessage = "";
     let connectTimer: ReturnType<typeof setTimeout> | undefined;
     let pendingSession: Promise<LucySession> | undefined;
+    let receivedLucyStream = false;
     try {
       lucy.current?.close();
       lucy.current = null;
@@ -848,6 +849,11 @@ export default function Studio() {
         reference.startsWith("data:") ? reference : undefined,
         (s) => {
           if (lucyAttempt.current !== attempt || !mounted.current) return;
+          receivedLucyStream = true;
+          if (connectTimer) {
+            clearTimeout(connectTimer);
+            connectTimer = undefined;
+          }
           if (editedVideo.current) {
             editedVideo.current.srcObject = s;
             void editedVideo.current.play();
@@ -864,6 +870,7 @@ export default function Studio() {
             /stale connect attempt/i.test(error)
           )
             return;
+          if (receivedLucyStream) return;
           providerMessage = error;
           setLucyError(error);
           setJobMessage(`Lucy is retrying: ${error}`);
@@ -872,16 +879,15 @@ export default function Studio() {
       const session = await Promise.race([
         pendingSession,
         new Promise<never>((_, reject) => {
-          connectTimer = setTimeout(
-            () =>
-              reject(
-                new Error(
-                  providerMessage ||
-                    "Lucy could not open a realtime session within 30 seconds.",
-                ),
+          connectTimer = setTimeout(() => {
+            if (receivedLucyStream) return;
+            reject(
+              new Error(
+                providerMessage ||
+                  "Lucy could not open a realtime session within 30 seconds.",
               ),
-            30_000,
-          );
+            );
+          }, 30_000);
         }),
       ]);
       if (lucyAttempt.current !== attempt || !stream.current?.active) {
@@ -892,6 +898,7 @@ export default function Studio() {
     } catch (e) {
       const message =
         e instanceof Error ? e.message : "Lucy could not connect.";
+      if (receivedLucyStream) return;
       if (
         lucyAttempt.current !== attempt ||
         !mounted.current ||
