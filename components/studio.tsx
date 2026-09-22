@@ -866,7 +866,7 @@ export default function Studio() {
             return;
           providerMessage = error;
           setLucyError(error);
-          setJobMessage("Lucy is retrying the realtime connection…");
+          setJobMessage(`Lucy is retrying: ${error}`);
         },
       );
       const session = await Promise.race([
