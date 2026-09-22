@@ -102,6 +102,30 @@ type ScanStage =
 const scanMinimumSeconds = 30;
 const scanMaximumSeconds = 30;
 
+function canvasDataUrl(
+  canvas: HTMLCanvasElement,
+  type = "image/jpeg",
+  quality = 0.85,
+) {
+  return new Promise<string>((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => {
+        if (!blob) {
+          reject(new Error("The room frame could not be encoded."));
+          return;
+        }
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = () =>
+          reject(new Error("The room frame could not be read."));
+        reader.readAsDataURL(blob);
+      },
+      type,
+      quality,
+    );
+  });
+}
+
 function wavBlob(chunks: Float32Array[], sampleRate: number) {
   const sampleCount = chunks.reduce((total, chunk) => total + chunk.length, 0);
   const buffer = new ArrayBuffer(44 + sampleCount * 2);
@@ -1525,7 +1549,7 @@ export default function Studio() {
         media.videoWidth * ratio,
         media.videoHeight * ratio,
       );
-    return canvas.toDataURL("image/jpeg", 0.9);
+    return canvasDataUrl(canvas, "image/jpeg", 0.9);
   }
   async function capture(
     includeItem = true,
@@ -1608,7 +1632,7 @@ export default function Studio() {
     ctx.fillStyle = "#78263b";
     ctx.font = "16px sans-serif";
     ctx.fillText("roomie  /  visual planning preview · not measured", 24, 785);
-    return canvas.toDataURL("image/jpeg", 0.85);
+    return canvasDataUrl(canvas, "image/jpeg", 0.85);
   }
   async function captureVideoFrame(media: HTMLVideoElement) {
     if (!media.videoWidth || !media.videoHeight)
@@ -1630,7 +1654,7 @@ export default function Studio() {
     ctx.fillStyle = "#78263b";
     ctx.font = "16px sans-serif";
     ctx.fillText("roomie  /  H3 suggestion frame · visual estimate", 24, 785);
-    return canvas.toDataURL("image/jpeg", 0.85);
+    return canvasDataUrl(canvas, "image/jpeg", 0.85);
   }
   async function captureH3Frame() {
     if (!clipUrl) throw new Error("No H3 clip is available.");
@@ -2124,8 +2148,7 @@ export default function Studio() {
                   className="room-background camera-feed"
                   style={{
                     visibility:
-                      source === "camera" &&
-                      (before || (!lucyActive && !lockedLucyFrameUrl))
+                      source === "camera" && (before || !lucyActive)
                         ? "visible"
                         : "hidden",
                   }}
@@ -2137,13 +2160,10 @@ export default function Studio() {
                   playsInline
                   className="room-background"
                   style={{
-                    visibility:
-                      lucyActive && !before && !lockedLucyFrameUrl
-                        ? "visible"
-                        : "hidden",
+                    visibility: lucyActive && !before ? "visible" : "hidden",
                   }}
                 />
-                {lockedLucyFrameUrl && (
+                {lockedLucyFrameUrl && !lucyActive && (
                   <img
                     className="room-background"
                     src={lockedLucyFrameUrl}
@@ -2168,7 +2188,7 @@ export default function Studio() {
                     {lucyPlaceholder
                       ? "Lucy fallback · placeholders"
                       : lockedLucyFrameUrl
-                        ? "Lucy layout · locked"
+                        ? "Lucy live · layout snapshot saved"
                         : lucyActive
                           ? lucySettling
                             ? "Hold steady · refining"
