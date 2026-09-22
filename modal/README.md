@@ -14,8 +14,17 @@ an end-to-end browser smoke test.
 5. Use **Scan this room** to upload a 10–15 second WebM/MP4 walkthrough (under 60 MB), or upload a PLY point cloud (under 3 MB) from Studio connections. Convex records the job, starts inference, and polls the reconstruction and analysis phases. Modal scales to zero; one GPU container limits concurrency.
 
 For a private CUDA check, run `modal run modal/spatial_service.py::gpu_health`.
+For an end-to-end model check using SpatialLM's official test point cloud, run
+`modal run modal/spatial_service.py::spatial_smoke`.
 
 For video input, the service samples frames, runs SLAM3R to create a temporary `.ply`, then runs SpatialLM. The files live only in the GPU container's temporary directory. The Convex source video is deleted after a successful snapshot; failed source videos expire within 24 hours or when the user deletes the scan. Returned geometry is stored as the job result and in the owner-scoped `roomScans` record. Until camera alignment and metric calibration are available, recommendations are visual only.
+
+Short walkthroughs are sampled at two frames per second (up to 30 frames). The
+service validates the PLY vertex count, records the actual SpatialLM error in
+Modal logs, and bounds generated geometry to plausible demo limits. If
+SpatialLM rejects an otherwise valid reconstruction, Roomie returns four
+conservative room-bound walls from the point cloud so Jev can continue with a
+clearly labeled visual estimate instead of leaving the scan failed.
 
 The upstream model supplies no calibrated object confidence here; `confidence: null` is deliberate. Each job uses temporary input/output files deleted on exit. The baked image contains model weights, never room captures. No room data is used for training.
 

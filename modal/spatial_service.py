@@ -17,6 +17,7 @@ import modal
 
 app = modal.App("roomie-spatial")
 MODEL = "manycore-research/SpatialLM1.1-Qwen-0.5B"
+MAX_GEOMETRY_ITEMS = {"walls": 12, "doors": 8, "windows": 12, "bboxes": 40}
 image = (
     modal.Image.from_registry("nvidia/cuda:12.4.1-devel-ubuntu22.04", add_python="3.11")
     .apt_install("git", "build-essential", "libgl1", "libglib2.0-0")
@@ -29,6 +30,7 @@ image = (
     .run_commands("pip install torch-scatter -f https://data.pyg.org/whl/torch-2.4.0+cu124.html")
     .pip_install("timm", "spconv-cu120", "fastapi", "httpx", "huggingface_hub")
     .run_commands(f"python -c \"from huggingface_hub import snapshot_download; snapshot_download('{MODEL}', local_dir='/opt/model')\"")
+    .run_commands("huggingface-cli download manycore-research/SpatialLM-Testset pcd/scene0000_00.ply --repo-type dataset --local-dir /opt/spatiallm-smoke")
     .apt_install("ffmpeg")
     .run_commands("git clone --depth 1 https://github.com/PKU-VCL-3DV/SLAM3R.git /opt/SLAM3R")
     .run_commands("python -m venv /opt/slam3r-env")
@@ -72,12 +74,95 @@ def _download(url: str, target: Path, limit: int) -> int:
     return size
 
 
-def _spatial_snapshot(point_cloud: Path, output: Path, request_id: str, started: float):
+def _ply_vertex_count(point_cloud: Path) -> int:
+    """Read a PLY vertex count without loading the full point cloud."""
+    with point_cloud.open("rb") as source:
+        if source.readline().strip() != b"ply":
+            raise ValueError("Input must be a PLY point cloud")
+        for _ in range(200):
+            line = source.readline()
+            if not line:
+                break
+            if line.startswith(b"element vertex "):
+                return int(line.split()[-1])
+            if line.strip() == b"end_header":
+                break
+    raise ValueError("Point cloud has no PLY vertex count")
+
+
+def _coarse_geometry(point_cloud: Path):
+    """Return conservative room bounds when the learned layout parser fails."""
+    import numpy as np
+    from spatiallm.pcd import load_o3d_pcd, get_points_and_colors
+
+    cloud = load_o3d_pcd(point_cloud)
+    points, _ = get_points_and_colors(cloud)
+    points = points[np.isfinite(points).all(axis=1)]
+    if len(points) < 500:
+        raise RuntimeError("The reconstructed point cloud is too sparse to analyze")
+    low, high = np.quantile(points, [0.03, 0.97], axis=0)
+    if np.any(high - low <= 1e-4):
+        raise RuntimeError("The reconstructed point cloud has invalid room bounds")
+    x0, y0, z0 = (round(float(value), 4) for value in low)
+    x1, y1, z1 = (round(float(value), 4) for value in high)
+    height = round(z1 - z0, 4)
+    walls = [
+        {"ax": x0, "ay": y0, "bx": x1, "by": y0, "height": height},
+        {"ax": x1, "ay": y0, "bx": x1, "by": y1, "height": height},
+        {"ax": x1, "ay": y1, "bx": x0, "by": y1, "height": height},
+        {"ax": x0, "ay": y1, "bx": x0, "by": y0, "height": height},
+    ]
+    return {"walls": walls, "doors": [], "windows": [], "bboxes": []}
+
+
+def _spatial_snapshot(
+    point_cloud: Path,
+    output: Path,
+    request_id: str,
+    started: float,
+    *,
+    allow_fallback: bool = True,
+):
     import numpy as np
     from spatiallm import Layout
-    args = ["python", "/opt/SpatialLM/inference.py", "--point_cloud", str(point_cloud), "--output", str(output), "--model_path", "/opt/model"]
-    subprocess.run(args, cwd="/opt/SpatialLM", check=True, timeout=480, capture_output=True)
-    layout = Layout(output.read_text())
+    vertex_count = _ply_vertex_count(point_cloud)
+    if vertex_count < 500:
+        raise RuntimeError(
+            f"The reconstructed point cloud is too sparse ({vertex_count} points)"
+        )
+    args = [
+        "python", "/opt/SpatialLM/inference.py",
+        "--point_cloud", str(point_cloud),
+        "--output", str(output),
+        "--model_path", "/opt/model",
+        "--seed", "0",
+    ]
+    inference_warning = None
+    try:
+        completed = subprocess.run(
+            args,
+            cwd="/opt/SpatialLM",
+            check=False,
+            timeout=420,
+            capture_output=True,
+            text=True,
+        )
+        if completed.returncode != 0:
+            detail = (completed.stderr or completed.stdout or "unknown error").strip()
+            print(f"SpatialLM failed for {request_id}: {detail[-6000:]}", flush=True)
+            raise RuntimeError(f"SpatialLM exited with status {completed.returncode}")
+        if not output.exists() or not output.read_text().strip():
+            raise RuntimeError("SpatialLM returned an empty layout")
+        layout = Layout(output.read_text())
+    except Exception as error:
+        if not allow_fallback:
+            raise
+        inference_warning = str(error)[:300]
+        print(
+            f"Using coarse geometry fallback for {request_id}: {inference_warning}",
+            flush=True,
+        )
+        layout = None
     def serializable(value):
         if isinstance(value, np.ndarray): return serializable(value.tolist())
         if isinstance(value, np.generic): return serializable(value.item())
@@ -85,8 +170,20 @@ def _spatial_snapshot(point_cloud: Path, output: Path, request_id: str, started:
         if isinstance(value, dict): return {key:serializable(item) for key,item in value.items()}
         if isinstance(value, (list,tuple)): return [serializable(item) for item in value]
         return value
-    geometry = {name:[serializable(vars(entity)) for entity in getattr(layout,name)[:100]] for name in ["walls","doors","windows","bboxes"]}
-    snapshot = {"mode":"live", "schemaVersion":1, "requestId":request_id, "model":MODEL, "reconstructionModel":"SLAM3R", "geometry":geometry, "confidence":None, "cameraAligned":False, "metricScaleVerified":False, "visualEstimate":True, "elapsedSeconds":round(time.monotonic()-started,2)}
+    geometry = (
+        {
+            name: [
+                serializable(vars(entity))
+                for entity in getattr(layout, name)[:MAX_GEOMETRY_ITEMS[name]]
+            ]
+            for name in MAX_GEOMETRY_ITEMS
+        }
+        if layout is not None
+        else _coarse_geometry(point_cloud)
+    )
+    snapshot = {"mode":"live", "schemaVersion":1, "requestId":request_id, "model":MODEL, "reconstructionModel":"SLAM3R", "geometry":geometry, "confidence":None, "cameraAligned":False, "metricScaleVerified":False, "visualEstimate":True, "pointCount":vertex_count, "spatialLmStatus":"fallback" if inference_warning else "completed", "elapsedSeconds":round(time.monotonic()-started,2)}
+    if inference_warning:
+        snapshot["warning"] = "SpatialLM could not parse this scan; coarse reconstructed room bounds are shown."
     if len(json.dumps(snapshot)) > 100_000:
         snapshot["geometry"] = {name:items[:20] for name,items in geometry.items()}
     return snapshot
@@ -120,6 +217,29 @@ def gpu_health():
     }
 
 
+@app.function(image=image, gpu="L4", timeout=600, max_containers=1, scaledown_window=60)
+def spatial_smoke():
+    """Run the actual SpatialLM model against its official test point cloud."""
+    started = time.monotonic()
+    with tempfile.TemporaryDirectory(prefix="roomie-spatial-smoke-") as folder:
+        snapshot = _spatial_snapshot(
+            Path("/opt/spatiallm-smoke/pcd/scene0000_00.ply"),
+            Path(folder) / "layout.txt",
+            "spatial-smoke",
+            started,
+            allow_fallback=False,
+        )
+        return {
+            "model": snapshot["model"],
+            "spatialLmStatus": snapshot["spatialLmStatus"],
+            "pointCount": snapshot["pointCount"],
+            "geometryCounts": {
+                name: len(items) for name, items in snapshot["geometry"].items()
+            },
+            "elapsedSeconds": snapshot["elapsedSeconds"],
+        }
+
+
 @app.function(image=image, gpu="L4", timeout=600, max_containers=1, scaledown_window=60, secrets=[secret])
 def infer(point_cloud_url: str, categories: list[str], request_id: str):
     started = time.monotonic()
@@ -142,16 +262,16 @@ def reconstruct_and_infer(video_url: str, categories: list[str], request_id: str
             video, frames, results = root / "scan", root / "frames", root / "results"
             frames.mkdir()
             _download(video_url, video, 60_000_000)
-            # One frame per second keeps a 10-15 second walkthrough small while
-            # retaining enough parallax for the demo reconstruction.
+            # Two frames per second preserves enough overlap for a short mobile
+            # walkthrough while keeping reconstruction bounded for the demo.
             subprocess.run(
-                ["ffmpeg", "-v", "error", "-i", str(video), "-vf", "fps=1,scale='min(720,iw)':-2", "-frames:v", "15", str(frames / "frame_%04d.jpg")],
+                ["ffmpeg", "-v", "error", "-i", str(video), "-vf", "fps=2,scale='min(720,iw)':-2", "-frames:v", "30", str(frames / "frame_%04d.jpg")],
                 check=True,
                 timeout=120,
                 capture_output=True,
             )
             frame_count = len(list(frames.glob("*.jpg")))
-            if frame_count < 8:
+            if frame_count < 12:
                 raise ValueError("Walkthrough needs at least 10 seconds of steady room coverage")
             command = [
                 "/opt/slam3r-env/bin/python", "/opt/SLAM3R/recon.py",
@@ -174,6 +294,9 @@ def reconstruct_and_infer(video_url: str, categories: list[str], request_id: str
                 raise RuntimeError("SLAM3R returned an empty point cloud")
             phases[request_id] = "analyzing"
             return _spatial_snapshot(point_cloud, root / "layout.txt", request_id, started)
+    except Exception:
+        phases[request_id] = "failed"
+        raise
     finally:
         # Leave the terminal phase briefly available to the polling API. The
         # FunctionCall result remains the source of truth for completion.
@@ -197,8 +320,9 @@ def api(payload: dict, request: "Request"):
             return {"status":"completed", "phase":"ready", "result":value}
         except TimeoutError:
             return {"status":"running", "phase":phase or "reconstructing"}
-        except Exception:
-            return {"status":"failed", "phase":"failed", "error":"Room reconstruction failed. Try a slower, brighter walkthrough."}
+        except Exception as error:
+            print(f"Room scan {request_id or call_id} failed: {error}", flush=True)
+            return {"status":"failed", "phase":"failed", "error":"Room reconstruction failed. The GPU service recorded the exact cause; retry this scan or record a brighter walkthrough."}
     point_cloud_url, video_url, request_id = payload.get("point_cloud_url"), payload.get("video_url"), payload.get("request_id")
     if not isinstance(request_id,str) or len(request_id)>100 or (bool(point_cloud_url) == bool(video_url)):
         raise HTTPException(400,"One room input URL and a request ID are required")
