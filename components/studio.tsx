@@ -1891,7 +1891,9 @@ export default function Studio() {
                 </Button>
                 <p className="microcopy">
                   {lucyActive
-                    ? "Lucy is generating your live view. Placement is requested; its rendered position is unverified."
+                    ? jevRunState === "ready"
+                      ? "Jev checked the requested item in Lucy’s live output. Visual estimate only."
+                      : "Lucy is generating your live view. Jev is checking whether the requested item appears."
                     : source === "camera"
                       ? connections.lucy
                         ? "Your camera remains unchanged until Decart Lucy returns its generated stream."
